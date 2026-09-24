@@ -1,0 +1,5 @@
+.env
+build/
+*.exe
+bin/
+*.log
