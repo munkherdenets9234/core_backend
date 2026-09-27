@@ -1,0 +1,26 @@
+name: Keep Render service awake
+
+# Render's free tier spins a web service down after 15 minutes with no
+# inbound traffic, and the next request then pays for a full cold start.
+# tenantcore sits on the request path of every product-service call —
+# including login, via the entitlement lookup in carwash's tenant gate — so
+# it going cold is felt by every product at once. A ping this often should
+# keep it from ever fully sleeping.
+#
+# GitHub disables a schedule after 60 days with no commits to the repo, so
+# this stops firing on a repo that has gone quiet — re-enable it from the
+# Actions tab, or push a commit, if that happens.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: GET /healthz
+        # --max-time 90: a cold Render dyno can take the better part of a
+        # minute to answer its first request; this waits that out instead of
+        # timing out and calling a successful wake-up a failure.
+        run: curl -fsS --max-time 90 https://core-backend-5cjs.onrender.com/healthz
