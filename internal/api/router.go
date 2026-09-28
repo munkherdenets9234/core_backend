@@ -3,7 +3,9 @@ package api
 import (
 	"net/http"
 
+	"github.com/eandstravel/tenantcore/docs"
 	"github.com/eandstravel/tenantcore/internal/api/admin"
+	publicapi "github.com/eandstravel/tenantcore/internal/api/public"
 	"github.com/eandstravel/tenantcore/internal/api/svc"
 	"github.com/eandstravel/tenantcore/internal/middleware"
 	"github.com/gin-gonic/gin"
@@ -40,7 +42,23 @@ func (s *Server) buildEngine() *gin.Engine {
 		PlatformUser:  d.PlatformUser,
 		ServiceClient: d.ServiceClient,
 		Entitlement:   d.Entitlement,
+		Showcase:      d.Showcase,
+		Quote:         d.Quote,
+		TenantPlan:    d.TenantPlan,
+		SiteContent:   d.SiteContent,
 		AuthRateLimit: s.limit("admin-auth", d.Config.AuthRatePerMinute),
+	})
+
+	// The operator's own marketing surface: no credential at all. Mounted
+	// as its own group beside /admin rather than under it, for the reason
+	// /svc is separate — a different audience should not be one router edit
+	// away from inheriting the console's middleware, or losing it.
+	publicapi.Register(v1.Group("/public"), publicapi.Deps{
+		Plan:          d.Plan,
+		Showcase:      d.Showcase,
+		Quote:         d.Quote,
+		Content:       d.SiteContent,
+		LeadRateLimit: s.limit("public-lead", d.Config.AuthRatePerMinute),
 	})
 
 	// The machine-to-machine surface. Deliberately NOT under /admin: it
@@ -100,6 +118,19 @@ func (s *Server) registerOperational(e *gin.Engine) {
 			"degraded": degraded,
 			"features": list,
 		})
+	})
+
+	// The API contract, served so an integrating product can fetch it instead
+	// of being handed a copy that then goes stale in its own repo.
+	// Unauthenticated on purpose: it describes the shape of the API, not any
+	// tenant's data, and a contract you need a credential to read is one
+	// nobody reads before writing a client against it.
+	//
+	// internal/api/openapi_test.go walks the live route table and diffs it
+	// against this file in both directions, so what is served here cannot
+	// silently drift from what the router actually does.
+	e.GET("/docs/api.json", func(c *gin.Context) {
+		c.Data(http.StatusOK, "application/json; charset=utf-8", docs.OpenAPI)
 	})
 
 	// The verifying key, unauthenticated by design: it is public, it is

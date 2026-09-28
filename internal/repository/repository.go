@@ -61,6 +61,43 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 			Options: options.Index().SetUnique(true),
 		}},
 
+		// One document per page of the marketing site.
+		{"site_content", mongo.IndexModel{
+			Keys:    bson.D{{Key: "page", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		}},
+
+		// One case study per tenant. Unique because the console upserts by
+		// tenant_id: without it, a double-submit writes a second document
+		// and every later read picks whichever Mongo returns first.
+		{"tenant_details", mongo.IndexModel{
+			Keys:    bson.D{{Key: "tenant_id", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		}},
+		// The public case-study list filters on showcase and sorts on
+		// sort_order, on an unauthenticated route anyone can call.
+		{"tenant_details", mongo.IndexModel{
+			Keys: bson.D{{Key: "showcase", Value: 1}, {Key: "sort_order", Value: 1}},
+		}},
+
+		// A tenant shows a given pricing card once. Unique so assigning
+		// twice is the same state as assigning once, which is what lets
+		// TenantPlanRepo.Assign upsert instead of erroring.
+		{"tenant_plans", mongo.IndexModel{
+			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "plan_id", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		}},
+
+		// Leads are listed newest-first, filtered by tenant on one screen.
+		// Not unique: the same person may enquire twice, and refusing the
+		// second enquiry would lose a real lead.
+		{"quotes", mongo.IndexModel{
+			Keys: bson.D{{Key: "created_at", Value: -1}},
+		}},
+		{"quotes", mongo.IndexModel{
+			Keys: bson.D{{Key: "tenant_id", Value: 1}, {Key: "created_at", Value: -1}},
+		}},
+
 		// One subscription per tenant. This is the constraint that encodes
 		// the billing model: a tenant buys one plan covering several
 		// modules, never several overlapping subscriptions.

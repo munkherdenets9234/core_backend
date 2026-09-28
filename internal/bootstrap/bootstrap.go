@@ -90,6 +90,10 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 	serviceClients := repository.NewServiceClientRepo(db)
 	plans := repository.NewPlanRepo(db)
 	subscriptions := repository.NewSubscriptionRepo(db)
+	tenantDetails := repository.NewTenantDetailRepo(db)
+	quotes := repository.NewQuoteRepo(db)
+	tenantPlans := repository.NewTenantPlanRepo(db)
+	siteContent := repository.NewSiteContentRepo(db)
 
 	platformUserSvc := service.NewPlatformUserService(platformUsers, maker, cfg.TokenTTL)
 
@@ -123,6 +127,10 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 		PlatformUser:  platformUserSvc,
 		ServiceClient: service.NewServiceClientService(serviceClients),
 		Entitlement:   service.NewEntitlementService(tenants, subscriptions, plans),
+		Showcase:      service.NewShowcaseService(tenantDetails, tenants),
+		Quote:         service.NewQuoteService(quotes),
+		TenantPlan:    service.NewTenantPlanService(tenantPlans, plans, tenants),
+		SiteContent:   service.NewSiteContentService(siteContent),
 	})
 
 	// The verifying key is logged at startup so it can be copied into a

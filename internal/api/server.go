@@ -32,6 +32,10 @@ type Deps struct {
 	PlatformUser  *service.PlatformUserService
 	ServiceClient *service.ServiceClientService
 	Entitlement   *service.EntitlementService
+	Showcase      *service.ShowcaseService
+	Quote         *service.QuoteService
+	TenantPlan    *service.TenantPlanService
+	SiteContent   *service.SiteContentService
 }
 
 type Server struct {

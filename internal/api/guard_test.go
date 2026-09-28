@@ -31,6 +31,16 @@ import (
 // private, this is where it shows up.
 var publicRoutes = map[string]bool{
 	"POST /api/v1/admin/login": true,
+
+	// The operator's own marketing surface. These four are the whole
+	// unauthenticated read/write surface of this service, and the list is
+	// the point: if a fifth ever appears here, someone has to justify it in
+	// review rather than discover it in production.
+	"GET /api/v1/public/plans":          true,
+	"GET /api/v1/public/projects":       true,
+	"GET /api/v1/public/projects/:slug": true,
+	"POST /api/v1/public/quotes":        true,
+	"GET /api/v1/public/content":        true,
 }
 
 func testKeys(t *testing.T) *token.Maker {

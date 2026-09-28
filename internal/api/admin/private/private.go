@@ -20,6 +20,10 @@ type Deps struct {
 	PlatformUser  *service.PlatformUserService
 	ServiceClient *service.ServiceClientService
 	Entitlement   *service.EntitlementService
+	Showcase      *service.ShowcaseService
+	Quote         *service.QuoteService
+	TenantPlan    *service.TenantPlanService
+	SiteContent   *service.SiteContentService
 
 	// AuthRateLimit guards the password-changing routes, which take a
 	// current password as input and are therefore guessable.
@@ -27,10 +31,11 @@ type Deps struct {
 }
 
 func Register(base *gin.RouterGroup, d Deps) {
-	tenants := &tenantsController{svc: d.Tenant, subs: d.Subscription, ent: d.Entitlement}
+	tenants := &tenantsController{svc: d.Tenant, subs: d.Subscription, ent: d.Entitlement, showcase: d.Showcase}
 	plans := &plansController{svc: d.Plan}
 	admins := &adminsController{svc: d.PlatformUser}
 	clients := &clientsController{svc: d.ServiceClient}
+	content := &contentController{showcase: d.Showcase, quotes: d.Quote, tenantPlan: d.TenantPlan, site: d.SiteContent}
 
 	g := httpx.Wrap(base)
 
@@ -54,12 +59,34 @@ func Register(base *gin.RouterGroup, d Deps) {
 	// module is missing" into a ten-second check.
 	t.GET("/:id/entitlement", tenants.GetEntitlement)
 
+	// The operator's own content about a tenant: its case study, the leads
+	// it produced, and which pricing cards it displays. None of this affects
+	// what the tenant is entitled to run.
+	t.GET("/:id/project", content.GetProject)
+	t.PUT("/:id/project", content.UpdateProject)
+	t.GET("/:id/quotes", content.ListTenantQuotes)
+	t.GET("/:id/packages", content.ListTenantPlans)
+	t.POST("/:id/packages", content.AssignPlan)
+	t.DELETE("/:id/packages/:package_id", content.UnassignPlan)
+
 	p := g.Group("/plans")
 	p.POST("", plans.Create)
 	p.GET("", plans.List)
 	p.GET("/:id", plans.Get)
 	p.PUT("/:id", plans.Update)
 	p.DELETE("/:id", plans.Delete)
+
+	q := g.Group("/quotes")
+	q.GET("", content.ListQuotes)
+	q.PUT("/:id/status", content.UpdateQuoteStatus)
+
+	// The marketing site's editable copy. Under /content rather than hung
+	// off a tenant: this is the operator's own site, which belongs to no
+	// tenant at all.
+	copy := g.Group("/content")
+	copy.GET("", content.ListPages)
+	copy.GET("/:page", content.GetPage)
+	copy.PUT("/:page", content.SavePage)
 
 	a := g.Group("/admins")
 	a.POST("", admins.Create)

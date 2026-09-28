@@ -16,21 +16,37 @@ name in a plan, not a change here.
 | `tenants` | identity, API key, domain binding, status |
 | `platform_users` | the operator's own staff; tenantcore issues their tokens |
 | `service_clients` | the product services permitted to call it |
-| `plans` | price, period, and what subscribing **grants** |
+| `plans` | price, period, what subscribing **grants**, and the pricing card that advertises it |
 | `subscriptions` | one per tenant |
+| `tenant_details` | the operator's case studies about tenants it has onboarded |
+| `quotes` | leads from the operator's contact form |
+| `tenant_plans` | which pricing cards a tenant displays on its own storefront |
 
-What it deliberately does not own: anything a product sells. Pricing cards a
-tenant shows its own visitors stay in the product, even though they look like
-plans — those are marketing copy, these are entitlements.
+The last three are the operator's own marketing content, not a product's.
+That is the line: Inno Nomads showing prospects who it has onboarded, and
+collecting enquiries from people who are not tenants of anything yet. A
+tenant's own storefront content still belongs to the product serving it.
 
-## The three audiences
+What it deliberately does not own: anything a product sells.
+
+## The four audiences
 
 ```
 /api/v1/admin/login          public   — no credential
 /api/v1/admin/**             console  — superadmin bearer token
+/api/v1/public/**            visitor  — no credential; the operator's own site
 /api/v1/svc/**               machine  — X-Service-Key, one per product service
-/healthz /readyz /.well-known/tenantcore   open
+/healthz /readyz /.well-known/tenantcore /docs/api.json   open
 ```
+
+`/public` is a narrow, deliberate exception to the rule that everything here
+needs a credential. Three things keep it narrow: every read returns only what
+has been explicitly published (an active plan, a showcased case study), and
+the filter lives in the repository query rather than a handler that could
+forget it; no view it can reach has a field for a contact email, an API key
+fragment, a tenant status or an entitlement; and its one write — the contact
+form — is rate limited and cannot set its own status. `internal/api/guard_test.go`
+lists those four routes explicitly, so a fifth has to be argued for in review.
 
 Each is a separate package with its own `Register`, mounted on a group that
 carries its own middleware. A controller in `admin/private` cannot be reached

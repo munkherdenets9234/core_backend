@@ -24,6 +24,10 @@ type Deps struct {
 	PlatformUser  *service.PlatformUserService
 	ServiceClient *service.ServiceClientService
 	Entitlement   *service.EntitlementService
+	Showcase      *service.ShowcaseService
+	Quote         *service.QuoteService
+	TenantPlan    *service.TenantPlanService
+	SiteContent   *service.SiteContentService
 
 	AuthRateLimit gin.HandlerFunc
 }
@@ -47,6 +51,10 @@ func Register(base *gin.RouterGroup, d Deps) {
 		PlatformUser:  d.PlatformUser,
 		ServiceClient: d.ServiceClient,
 		Entitlement:   d.Entitlement,
+		Showcase:      d.Showcase,
+		Quote:         d.Quote,
+		TenantPlan:    d.TenantPlan,
+		SiteContent:   d.SiteContent,
 		AuthRateLimit: d.AuthRateLimit,
 	})
 }

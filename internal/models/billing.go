@@ -50,6 +50,18 @@ type Plan struct {
 	// Capabilities are on/off grants, keyed the same way. Absent is off.
 	Capabilities map[string]bool `bson:"capabilities,omitempty" json:"capabilities"`
 
+	// Marketing is the pricing card a visitor reads: bilingual copy that the
+	// public site renders and the console edits.
+	//
+	// It sits on the plan rather than in a separate collection because a
+	// price list has exactly one row per plan, and splitting it bought
+	// nothing but a join. It stays a NESTED document rather than loose
+	// fields so the two halves of this type cannot be confused: everything
+	// above is enforced by a server, everything in here is read by a human.
+	// Nothing in this struct is ever consulted when assembling an
+	// entitlement.
+	Marketing *PlanMarketing `bson:"marketing,omitempty" json:"marketing,omitempty"`
+
 	IsActive  bool      `bson:"is_active" json:"is_active"`
 	SortOrder int       `bson:"sort_order" json:"sort_order"`
 	CreatedAt time.Time `bson:"created_at" json:"created_at"`
@@ -71,6 +83,63 @@ func (p Plan) Period() int {
 		return DefaultPeriodDays
 	}
 	return p.PeriodDays
+}
+
+// LocaleText is one string per language, keyed by ISO code ("en", "mn").
+//
+// A map rather than a struct with named fields: adding a third language
+// should be a data change, not a schema migration in three repositories.
+type LocaleText map[string]string
+
+// LocaleList is the same idea for bullet lists.
+type LocaleList map[string][]string
+
+// PlanMarketing is the visitor-facing half of a plan.
+//
+// Every field here is optional. A plan created for internal use — a comped
+// account, a migration placeholder — has no pricing card and should not be
+// forced to invent one.
+type PlanMarketing struct {
+	Name        LocaleText `bson:"name,omitempty" json:"name,omitempty"`
+	Tagline     LocaleText `bson:"tagline,omitempty" json:"tagline,omitempty"`
+	BillingNote LocaleText `bson:"billing_note,omitempty" json:"billing_note,omitempty"`
+	Features    LocaleList `bson:"features,omitempty" json:"features,omitempty"`
+	// Highlighted draws the "most popular" ribbon on the public pricing page.
+	Highlighted bool `bson:"highlighted,omitempty" json:"highlighted,omitempty"`
+}
+
+// Text returns the copy for lang, falling back to English and then to any
+// language present. A pricing card with a blank name because one translation
+// was never filled in is worse than showing the other language.
+func (t LocaleText) Text(lang string) string {
+	if v, ok := t[lang]; ok && v != "" {
+		return v
+	}
+	if v, ok := t["en"]; ok && v != "" {
+		return v
+	}
+	for _, v := range t {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// List is LocaleList's counterpart to Text, with the same fallback order.
+func (l LocaleList) List(lang string) []string {
+	if v, ok := l[lang]; ok && len(v) > 0 {
+		return v
+	}
+	if v, ok := l["en"]; ok && len(v) > 0 {
+		return v
+	}
+	for _, v := range l {
+		if len(v) > 0 {
+			return v
+		}
+	}
+	return []string{}
 }
 
 type SubscriptionStatus string
