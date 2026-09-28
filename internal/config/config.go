@@ -65,6 +65,15 @@ type Config struct {
 	RateLimitEnabled  bool
 	AuthRatePerMinute int
 	RateLimitBurst    int
+
+	// Gmail, for transactional mail. tenantcore is the only service that
+	// holds mail credentials — products ask it to send, over /svc, rather
+	// than each carrying its own copy of this password.
+	//
+	// GmailPassword must be a Google APP PASSWORD (2FA on the account), not
+	// the account password; Google has rejected the latter since 2022.
+	GmailEmail    string
+	GmailPassword string
 }
 
 // IsDev reports whether stack traces and debug routing are appropriate.
@@ -74,6 +83,13 @@ func (c Config) IsDev() bool { return c.AppEnv != EnvProduction }
 
 func (c Config) SuperadminBootstrapEnabled() bool {
 	return c.SuperadminEmail != "" && c.SuperadminPassword != ""
+}
+
+// EmailEnabled reports whether this deployment can send mail. Both halves are
+// required: an address with no app password authenticates on every send and
+// fails, which looks like an outage rather than a missing setting.
+func (c Config) EmailEnabled() bool {
+	return c.GmailEmail != "" && c.GmailPassword != ""
 }
 
 type Feature struct {
@@ -101,6 +117,12 @@ func (c Config) Features() []Feature {
 			Name:    "rate_limiting",
 			Enabled: c.RateLimitEnabled,
 			Detail:  "RATE_LIMIT_ENABLED=false — login and password changes accept unlimited requests",
+		},
+		{
+			Name:    "email",
+			Enabled: c.EmailEnabled(),
+			Detail: "GMAIL_EMAIL/GMAIL_PASSWORD are not both set — POST /svc/notifications/email " +
+				"answers 503 FEATURE_UNAVAILABLE, so password-reset mail is never delivered",
 		},
 	}
 }
@@ -174,6 +196,9 @@ func Load() *Config {
 		RateLimitEnabled:  getEnvBool("RATE_LIMIT_ENABLED", true),
 		AuthRatePerMinute: getEnvInt("AUTH_RATE_PER_MINUTE", 10),
 		RateLimitBurst:    getEnvInt("RATE_LIMIT_BURST", 5),
+
+		GmailEmail:    getEnv("GMAIL_EMAIL", ""),
+		GmailPassword: getEnv("GMAIL_PASSWORD", ""),
 	}
 }
 

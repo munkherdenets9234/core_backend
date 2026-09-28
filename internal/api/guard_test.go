@@ -32,10 +32,35 @@ import (
 var publicRoutes = map[string]bool{
 	"POST /api/v1/admin/login": true,
 
-	// The operator's own marketing surface. These four are the whole
-	// unauthenticated read/write surface of this service, and the list is
-	// the point: if a fifth ever appears here, someone has to justify it in
-	// review rather than discover it in production.
+	// Password reset, unauthenticated because it cannot be anything else:
+	// someone who has forgotten their password has no credential to present.
+	//
+	// The justification this list demands, since these are the most exposed
+	// routes in the service. Three properties carry it, all enforced in
+	// service.PasswordResetService rather than in a controller, so no later
+	// edit to a handler can weaken them:
+	//
+	//  1. Request answers the SAME 200 for an unknown address, a suspended
+	//     account and a mail failure. Otherwise this is an oracle for who
+	//     administers the platform — the list you would want before guessing
+	//     passwords or writing a phishing mail.
+	//  2. Confirm answers the SAME error for a wrong code, an expired one,
+	//     one already used, and an address with no code at all.
+	//  3. The code is six digits, so it is only safe because it is
+	//     single-use, expires in ten minutes, and is burned after five wrong
+	//     guesses. Remove any one of those and the other two stop being
+	//     enough.
+	//
+	// Both are rate limited on top. Neither issues a token: signing in
+	// afterwards is a separate step, so a weakness here cannot hand out a
+	// session directly.
+	"POST /api/v1/admin/password-reset/request": true,
+	"POST /api/v1/admin/password-reset/confirm": true,
+
+	// The operator's own marketing surface. These five plus the three above
+	// are the whole unauthenticated read/write surface of this service, and
+	// the list is the point: if another ever appears here, someone has to
+	// justify it in review rather than discover it in production.
 	"GET /api/v1/public/plans":          true,
 	"GET /api/v1/public/projects":       true,
 	"GET /api/v1/public/projects/:slug": true,

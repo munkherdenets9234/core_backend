@@ -40,6 +40,7 @@ func (s *Server) buildEngine() *gin.Engine {
 		Plan:          d.Plan,
 		Subscription:  d.Subscription,
 		PlatformUser:  d.PlatformUser,
+		PasswordReset: d.PasswordReset,
 		ServiceClient: d.ServiceClient,
 		Entitlement:   d.Entitlement,
 		Showcase:      d.Showcase,
@@ -68,6 +69,11 @@ func (s *Server) buildEngine() *gin.Engine {
 	svc.Register(v1.Group("/svc"), svc.Deps{
 		ServiceClient: d.ServiceClient,
 		Entitlement:   d.Entitlement,
+		Mail:          d.Mail,
+		// Shares the auth bucket's per-minute figure rather than inventing a
+		// third knob: both guard an expensive, abusable operation, and the
+		// right number for one is the right order of magnitude for the other.
+		SendRateLimit: s.limit("svc-email", d.Config.AuthRatePerMinute),
 	})
 
 	return e

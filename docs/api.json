@@ -2443,6 +2443,263 @@
           }
         }
       }
+    },
+    "/api/v1/svc/notifications/email": {
+      "post": {
+        "tags": [
+          "Service"
+        ],
+        "operationId": "sendNotificationEmail",
+        "security": [
+          {
+            "serviceKey": []
+          }
+        ],
+        "summary": "Send a templated email on behalf of a product service",
+        "description": "tenantcore is the only service that holds mail credentials. Products do not send their own mail — they ask here, the same way they ask about entitlements, so one Gmail app password lives in one place and is rotated in one place instead of being copied into every product's .env.\n\n**The division of labour is the opposite of `/svc/entitlements`, and worth getting straight.** For entitlements, tenantcore is the authority and the product is asking. Here tenantcore is a utility: the PRODUCT owns the flow. For a password reset, digitalservice holds the tenant users, mints the token, builds the link and decides who is allowed one; this endpoint only puts the resulting message in an inbox. tenantcore never sees the token and cannot validate it.\n\n**The caller names a `template`; it cannot supply a subject, a body, or a From.** Those come from the template and from this service's configuration. A service key is a machine credential sitting in another service's environment, so if one leaks the damage should be \"someone triggered a password-reset mail\" rather than \"someone sent arbitrary mail from our address to anyone they liked\". Adding a message means adding a template here, in review.\n\nRate limited on top of the service-key check — a leaked key should not be able to empty the sending account's daily quota before anyone notices.\n\n`200` means the relay ACCEPTED the message, not that it was delivered; SMTP cannot promise the latter. `503 FEATURE_UNAVAILABLE` means this deployment has no mail credentials configured, which is reported at startup and on `/readyz` — password resets do not work at all in that state, and failing loudly beats a reset mail that silently never arrives.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "to",
+                  "template"
+                ],
+                "properties": {
+                  "to": {
+                    "type": "string",
+                    "format": "email",
+                    "description": "Recipient address.",
+                    "example": "admin@example.mn"
+                  },
+                  "template": {
+                    "type": "string",
+                    "enum": [
+                      "password_reset",
+                      "password_changed"
+                    ],
+                    "description": "Which message to send. A closed set — an unknown name is a 400 naming the valid options. `password_reset` carries a one-time link; `password_changed` is the after-the-fact notice, which exists because a password change the owner did not make is the one thing they must hear about immediately."
+                  },
+                  "data": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Values substituted into the template. `password_reset` requires `app`, `name`, `reset_url` and `expires_in`; `password_changed` requires `app` and `name`. A missing key is a 400 naming it, never a mail that goes out with a blank where the link should be.",
+                    "example": {
+                      "app": "Travel Mongolia Admin",
+                      "name": "Munkh-Erdene",
+                      "reset_url": "https://admin.example.mn/reset?token=…",
+                      "expires_in": "1 hour"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted by the relay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "accepted": {
+                              "type": "boolean",
+                              "example": true
+                            },
+                            "template": {
+                              "type": "string",
+                              "example": "password_reset"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown template, missing template data, or a malformed address"
+          },
+          "401": {
+            "description": "Missing or unknown X-Service-Key"
+          },
+          "429": {
+            "description": "Rate limited"
+          },
+          "503": {
+            "description": "FEATURE_UNAVAILABLE — no mail credentials configured on this deployment"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/password-reset/request": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "requestPasswordReset",
+        "security": [],
+        "summary": "Request an emailed password reset code",
+        "description": "Mails a six-digit, single-use code to the address, if it belongs to an **active** platform admin. Unauthenticated, because it has to be — someone who has forgotten their password has no credential to present.\n\n**This always answers `200`.** An unknown address, a suspended account and a failure to send the mail are indistinguishable to the caller, and that is deliberate: an endpoint that says \"no such account\" is an oracle for who administers this platform, which is exactly the list someone would want before guessing passwords or writing a convincing phishing mail. The distinctions are real and they are written to the server log, not to the response.\n\nThe one exception is `503 FEATURE_UNAVAILABLE`, when the deployment has no mail credentials configured. That says nothing about the account and everything about the deployment, and hiding it would leave the caller waiting for a code that can never be sent.\n\nRequesting again invalidates any previous code, so only the newest one works — otherwise an account with three requested codes has three live credentials, and the oldest is the one most likely to have been forwarded or seen.\n\nRate limited by `AUTH_RATE_PER_MINUTE`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "example": "munkherdene.ts9234@gmail.com"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Always, whether or not the address belongs to an account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "sent": {
+                              "type": "boolean",
+                              "example": true
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "If that address belongs to an account, a reset code is on its way."
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed email address"
+          },
+          "429": {
+            "description": "Rate limited"
+          },
+          "503": {
+            "description": "FEATURE_UNAVAILABLE — no mail credentials configured"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/password-reset/confirm": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "confirmPasswordReset",
+        "security": [],
+        "summary": "Set a new password using an emailed code",
+        "description": "Verifies the code and sets the new password.\n\n**Every failure is the same error**, with one message and one code: a wrong code, an expired one, one already used, and an address with no outstanding code are not distinguishable from outside. Same reasoning as the request step — the differences belong in our log.\n\nA six-digit code is a million possibilities, which is only safe because of three limits together: it is **single-use**, it **expires in 10 minutes**, and the reset is **burned after 5 wrong guesses**. Remove any one and the other two stop being enough. Codes are stored hashed, and compared in constant time so a partial match leaks nothing.\n\nOn success every remaining code for that user is invalidated, and a `password_changed` notice is mailed — a password change the owner did not make is the one thing they must hear about immediately.\n\n**No token is returned.** Sign in with the new password as a separate step: a reset flow that hands back a live session turns any weakness in it directly into account access.\n\nNote that existing sessions are NOT revoked. Tokens are Ed25519-signed and verified offline by every product service, so a token already issued keeps working until `TOKEN_TTL` expires — at most 24h, one hour by default. That is the cost of offline verification, and it is a deliberate trade, not an oversight.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email",
+                  "code",
+                  "new_password"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "example": "munkherdene.ts9234@gmail.com"
+                  },
+                  "code": {
+                    "type": "string",
+                    "example": "048213",
+                    "description": "The six-digit code from the email."
+                  },
+                  "new_password": {
+                    "type": "string",
+                    "minLength": 8,
+                    "example": "a-new-strong-password"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "reset": {
+                              "type": "boolean",
+                              "example": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or spent code, or a new password shorter than 8 characters"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
     }
   },
   "components": {

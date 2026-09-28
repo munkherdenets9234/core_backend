@@ -26,6 +26,7 @@ import (
 	"github.com/eandstravel/tenantcore/internal/repository"
 	"github.com/eandstravel/tenantcore/internal/service"
 	"github.com/eandstravel/tenantcore/pkg/logger"
+	"github.com/eandstravel/tenantcore/pkg/mailer"
 	"github.com/eandstravel/tenantcore/pkg/token"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -87,6 +88,7 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 
 	tenants := repository.NewTenantRepo(db)
 	platformUsers := repository.NewPlatformUserRepo(db)
+	passwordResets := repository.NewPasswordResetRepo(db)
 	serviceClients := repository.NewServiceClientRepo(db)
 	plans := repository.NewPlanRepo(db)
 	subscriptions := repository.NewSubscriptionRepo(db)
@@ -110,6 +112,7 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 	}
 
 	limiter := middleware.NewRateLimiter()
+	mail := buildMailer(cfg, log)
 
 	srv := api.NewServer(api.Deps{
 		Config: cfg,
@@ -117,6 +120,7 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 
 		Auth:        middleware.NewAuth(maker.Verifier()),
 		RateLimiter: limiter,
+		Mail:        mail,
 
 		PublicKeyB64: maker.PublicKeyB64(),
 		KeyID:        maker.KeyID(),
@@ -125,6 +129,7 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 		Plan:          service.NewPlanService(plans),
 		Subscription:  service.NewSubscriptionService(subscriptions, plans),
 		PlatformUser:  platformUserSvc,
+		PasswordReset: service.NewPasswordResetService(platformUsers, passwordResets, mail, log),
 		ServiceClient: service.NewServiceClientService(serviceClients),
 		Entitlement:   service.NewEntitlementService(tenants, subscriptions, plans),
 		Showcase:      service.NewShowcaseService(tenantDetails, tenants),
@@ -192,6 +197,27 @@ func (a *App) Close(ctx context.Context) {
 	if a.mongo != nil {
 		_ = a.mongo.Disconnect(ctx)
 	}
+}
+
+// buildMailer returns the SMTP sender, or nil when no credentials are set.
+//
+// Same rule as every optional dependency: a missing setting disables one
+// capability and says so, rather than stopping a platform that four services
+// depend on. What it costs when off is worth naming precisely — password
+// resets are the whole reason this exists, and "mail is off" and "resets are
+// broken" are the same sentence.
+func buildMailer(cfg *config.Config, log *zap.Logger) *mailer.Mailer {
+	if !cfg.EmailEnabled() {
+		log.Warn("email is off — GMAIL_EMAIL/GMAIL_PASSWORD are not both set; " +
+			"POST /svc/notifications/email answers 503 and no password-reset mail is delivered")
+		return nil
+	}
+	m := mailer.New(mailer.Config{
+		Username: cfg.GmailEmail,
+		Password: cfg.GmailPassword,
+	})
+	log.Info("email ready", zap.String("from", m.From()))
+	return m
 }
 
 // logFeatures states every optional capability and its status at startup.

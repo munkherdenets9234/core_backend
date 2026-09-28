@@ -105,6 +105,24 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 			Keys:    bson.D{{Key: "tenant_id", Value: 1}},
 			Options: options.Index().SetUnique(true),
 		}},
+
+		// Reset lookups are by email, newest first.
+		{"password_resets", mongo.IndexModel{
+			Keys: bson.D{{Key: "email", Value: 1}, {Key: "created_at", Value: -1}},
+		}},
+
+		// A TTL index, so spent codes delete themselves an hour past expiry.
+		//
+		// Not housekeeping: a reset code is a credential, and a collection of
+		// old ones is a collection of hashed credentials sitting in every
+		// backup for no reason. The hour of slack is deliberate — the code
+		// stops working at expires_at, and the row lingering slightly longer
+		// means a replay is answered "expired" rather than "no such code",
+		// which is the more useful thing to tell someone typing a stale code.
+		{"password_resets", mongo.IndexModel{
+			Keys:    bson.D{{Key: "expires_at", Value: 1}},
+			Options: options.Index().SetExpireAfterSeconds(3600),
+		}},
 	}
 
 	for _, s := range specs {
