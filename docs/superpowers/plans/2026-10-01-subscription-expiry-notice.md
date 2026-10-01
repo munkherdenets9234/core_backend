@@ -20,7 +20,8 @@ All paths below are relative to `D:\bkup\projects\digitalbrochure`. Go commands 
 - Only `active` and `trialing` subscriptions are warned about.
 - **Claim before send**; release the claim if the send (or a lookup) fails.
 - The marker is the `current_period_end` value warned about, stored as `expiry_notice_for`, `json:"-"`.
-- Renew: new end = `max(now, current_period_end)` + one plan period. Cancelled returns `409`; no subscription returns `404`. No request body.
+- Renew: new end = `billingAlignedEnd(max(now, current_period_end), plan period, billing day)`. Cancelled returns `409`; no subscription returns `404`. No request body.
+- Billing day: `BillingDay` 1 to 28, `DefaultBillingDay = 20`; a subscription with none stored behaves as 20. Period ends are 00:00 UTC on the billing day. Changing the day affects future periods only, never `current_period_end`. (Spec: "Billing day".)
 - Subscription routes bind `plan_id`. Package assignment binds `package_id`. Do not unify them.
 - Mail is template-only; the sender is fixed server-side.
 - Responses may carry `null` collections; console types must admit `null`.
@@ -36,6 +37,7 @@ Failure modes the spec implies that no obvious test covers. Each has a test in i
 2. A tenant or plan lookup that fails **after** the claim must release it, or the warning is silently lost for that period. Owner: Task 4.
 3. One subscription failing to send must not stop the others in the same tick. Owner: Task 4.
 4. `days_left` for a live subscription must never read `0` or round down: 6 days 23 hours reads 7, 1 hour reads 1. Owner: Task 4.
+6. Billing-day date math at its edges: a base that falls exactly on the billing day, a day of 28, a billing day earlier in the month than the base, a 90-day plan, and a very short plan, which must never produce an end on or before the base. Owner: Task 6b.
 5. The console must render a subscription whose plan was deleted (`plan` is null) and a cancelled one without crashing, and must not offer Renew on a cancelled one. Owner: Task 8.
 
 ---
@@ -297,6 +299,56 @@ git commit -m "feat: add POST /admin/tenants/:id/subscription/renew"
 
 ---
 
+### Task 6b: Billing day (added after Task 6 shipped; amends it)
+
+**Files:**
+- Modify: `tenantcore/internal/models/billing.go`, `tenantcore/internal/repository/billing_repo.go`, `tenantcore/internal/service/billing_service.go`, `tenantcore/internal/api/admin/private/tenants.go`, `tenantcore/internal/api/admin/private/private.go`, `tenantcore/docs/api.json`
+- Test: `tenantcore/internal/service/billing_day_test.go`, update `tenantcore/internal/service/renew_test.go`
+
+**Interfaces:**
+- Produces: `models.DefaultBillingDay = 20`; `Subscription.BillingDay int` (`bson:"billing_day,omitempty" json:"billing_day"`); `func (s Subscription) EffectiveBillingDay() int` (0 means 20).
+- Produces (unexported, pure): `billingAlignedEnd(base time.Time, periodDays, billingDay int) time.Time`, `validBillingDay(d int) bool` (1 to 28).
+- Changes: `renewedEnd(now, currentEnd time.Time, periodDays, billingDay int) time.Time` now returns `billingAlignedEnd(max(now, currentEnd), periodDays, billingDay)`.
+- Changes: `SubscriptionService.Create` takes an optional billing day (0 means default) and ends at `billingAlignedEnd(now, period, day)`; `UpdatePlan` ends at `billingAlignedEnd(now, period, sub.EffectiveBillingDay())`.
+- Produces: `SubscriptionRepo.SetBillingDay(ctx, tenantID primitive.ObjectID, day int, userID *primitive.ObjectID) error` (`mongo.ErrNoDocuments` when none); `SubscriptionService.SetBillingDay(ctx, tenantID, day int, userID *primitive.ObjectID) error` (`400` outside 1 to 28, `404` when none); `PUT /api/v1/admin/tenants/:id/subscription/billing-day` body `{ "billing_day": int }`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`TestBillingAlignedEnd`, all UTC, billing day 20, 30-day plan unless stated. Assert exact results:
+- base 2026-10-20 00:00 -> 2026-11-20 00:00
+- base 2026-10-31 04:12 -> 2026-11-20 00:00
+- base 2026-10-15 00:00 -> 2026-11-20 00:00 (not 2026-10-20)
+- base 2026-10-03 12:00 -> 2026-10-20 00:00 (a short first period)
+- `earliest` landing exactly on the day: base 2026-10-05 00:00 (earliest 2026-10-20 00:00) -> 2026-10-20 00:00
+- billing day 28, base 2026-01-31 -> 2026-02-28 00:00
+- 90-day plan, base 2026-10-20 -> 2027-01-20 00:00 (adds two whole months)
+- 1-day plan, base 2026-10-20 12:00 -> strictly after the base (never on or before it). **Review Focus 6.**
+
+`TestEffectiveBillingDay`: 0 -> 20, 5 -> 5. `TestValidBillingDay`: 0 and 29 false, 1 and 28 true. Update `TestRenewedEnd` to the new signature using billing day 20 and these cases: current end 2026-10-31, now 2026-10-01 -> 2026-11-20; lapsed end 2026-08-01, now 2026-10-03 -> 2026-10-20.
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `go test ./internal/service/ -run "BillingAlignedEnd|EffectiveBillingDay|ValidBillingDay|RenewedEnd" -count=1`
+Expected: FAIL (undefined, then a wrong `renewedEnd` result).
+
+- [ ] **Step 3: Implement** the model field, `EffectiveBillingDay`, `billingAlignedEnd` (earliest = base + max(24h, periodDays/2 days); first billing-day date at 00:00 UTC on or after it; plus `max(1, (periodDays+15)/30) - 1` months), `validBillingDay`, the changed `renewedEnd`/`Create`/`UpdatePlan`, `SetBillingDay` at both layers, the handler and route. `UpdatePlan` and `Create` keep their existing 404/409 behaviour. The create handler reads an optional `billing_day` and rejects an invalid one with `400`.
+
+- [ ] **Step 4: Document.** Add the new route to `docs/api.json`, add `billing_day` to the `Subscription` schema and to the create body, and update the descriptions of renew, create and change-plan to state the billing-day rule. Preserve CRLF.
+
+- [ ] **Step 5: Run to verify pass**
+
+Run: `go test ./... -count=1`
+Expected: PASS, including the route-table and superadmin-token guards.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add tenantcore/internal tenantcore/docs/api.json
+git commit -m "feat: align subscription periods to a per-subscription billing day"
+```
+
+---
+
 ### Task 7: Console data layer and actions
 
 **Files:**
@@ -305,6 +357,7 @@ git commit -m "feat: add POST /admin/tenants/:id/subscription/renew"
 
 **Interfaces:**
 - Produces in `lib/types.ts`: `SubscriptionStatus = "active" | "trialing" | "past_due" | "canceled"`; `Subscription { id; tenant_id; plan_id; status: SubscriptionStatus; current_period_start: string; current_period_end: string; canceled_at?: string | null; plan?: { id: string; slug: string; name: string; price: number; currency: string; period_days: number } | null }`.
+- `Subscription` also carries `billing_day: number`. `projectedEnd(mode, now, currentEnd, periodDays, billingDay)` gains the billing day and mirrors `billingAlignedEnd`; add `setBillingDayAction(tenantId, prev, formData)` posting `{ billing_day }` to `PUT .../subscription/billing-day`, and let `subscribeAction` send an optional `billing_day`.
 - Produces `getTenantSubscription(tenantId: string): Promise<Subscription | null>`: calls `GET /admin/tenants/{id}/subscription`, returns `null` on a 404, rethrows anything else.
 - Produces in `lib/subscription.ts` (pure): `daysRemaining(now: Date, end: Date): number` (rounded up, never negative); `projectedEnd(mode: "change" | "renew", now: Date, currentEnd: Date, periodDays: number): Date` where `change` is `now + periodDays` and `renew` is `max(now, currentEnd) + periodDays`; `DEFAULT_PERIOD_DAYS = 30`.
 - Produces server actions, each returning `{ error?: string }` or void: `subscribeAction(tenantId, prev, formData)` posting `{ plan_id }` to `POST /admin/tenants/{id}/subscription`; `changePlanAction(tenantId, prev, formData)` putting `{ plan_id }` to `PUT .../subscription/plan`; `renewSubscriptionAction(tenantId)` posting to `.../subscription/renew`; `cancelSubscriptionAction(tenantId)` posting to `.../subscription/cancel`. Each calls `revalidatePath("/admin/tenants/{id}/subscription")`.
@@ -347,6 +400,7 @@ Behaviour, per the spec:
 - Change plan form: shows `projectedEnd("change", ...)` **before** submit, with the note that the current period is replaced.
 - Renew button: shows `projectedEnd("renew", ...)` before submit. **Hidden when the status is `canceled`**, replaced by a line pointing to Change plan.
 - Cancel button: requires a confirmation step; wording states that Change plan can reactivate. **Hidden when already cancelled.**
+- Billing day field (1 to 28) with its own Save and the note that it affects future periods only; Subscribe has the same field defaulting to 20. All date previews use the billing-day rule.
 - A `null` `plan` renders `Plan removed` and does not crash. **Review Focus 5.**
 
 - [ ] **Step 1: Implement the page and panel**, then add the link.
