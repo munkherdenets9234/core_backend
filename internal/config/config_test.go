@@ -156,3 +156,49 @@ func TestGetEnvDurationFallsBackOnGarbage(t *testing.T) {
 		t.Errorf("got %v, want 45m", got)
 	}
 }
+
+// The expiry notice is mail with an address on top of it. Either half missing
+// means no warning is ever sent, so the readiness entry must go off with it.
+func TestExpiryNoticeNeedsMailAndAddress(t *testing.T) {
+	cases := []struct {
+		name    string
+		mail    bool
+		address string
+		want    bool
+	}{
+		{"mail and address", true, "ops@example.com", true},
+		{"mail but no address", true, "", false},
+		{"address but no mail", false, "ops@example.com", false},
+		{"neither", false, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := valid()
+			if tc.mail {
+				c.GmailEmail, c.GmailPassword = "me@gmail.com", "app-password"
+			}
+			c.ExpiryNoticeEmail = tc.address
+
+			if got := c.ExpiryNoticeEnabled(); got != tc.want {
+				t.Fatalf("ExpiryNoticeEnabled() = %v, want %v", got, tc.want)
+			}
+
+			var feature *Feature
+			for _, f := range c.Features() {
+				if f.Name == "expiry_notice" {
+					f := f
+					feature = &f
+				}
+			}
+			if feature == nil {
+				t.Fatal("Features() has no expiry_notice entry")
+			}
+			if feature.Enabled != tc.want {
+				t.Fatalf("expiry_notice Enabled = %v, want %v", feature.Enabled, tc.want)
+			}
+			if !tc.want && !strings.Contains(feature.Detail, "EXPIRY_NOTICE_EMAIL") {
+				t.Fatalf("disabled detail should name EXPIRY_NOTICE_EMAIL, got %q", feature.Detail)
+			}
+		})
+	}
+}
