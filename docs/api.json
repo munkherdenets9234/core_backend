@@ -758,6 +758,51 @@
         }
       }
     },
+    "/api/v1/admin/tenants/{id}/subscription/renew": {
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "renewTenantSubscription",
+        "summary": "Extend a tenant's subscription by one plan period",
+        "description": "Pushes `current_period_end` out by one plan period (`plan.period_days`, or 30 when the plan sets none or has been deleted), keeps the plan and the period start, and sets the status to `active`. No request body: the length is always one period, and a custom length is deliberately not offered.\n\n**The new end is `max(now, current_period_end)` plus one period.** A live subscription keeps the days the tenant already paid for. A lapsed one renews from today, so renewing a long-dead subscription cannot land in the past and leave the tenant still expired.\n\nThis is not the same as `PUT /subscription/plan`, which restarts the period from today and so DISCARDS the days remaining. Use Renew to extend, Change plan to move between plans.\n\n**A cancelled subscription returns `409`.** Cancelling is a deliberate act, and renewing it quietly would erase the fact that the tenant was cancelled on purpose. Change plan reactivates it explicitly. `past_due` and `trialing` subscriptions can be renewed. `404` when the tenant has no subscription.\n\nRenewing also re-arms the seven-day expiry warning for the new period, with no reset step: the warning is keyed to the period end date, which has just moved.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The renewed subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Subscription"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such tenant, or the tenant has no subscription"
+          },
+          "409": {
+            "description": "The subscription is canceled; use Change plan to reactivate it"
+          }
+        }
+      }
+    },
     "/api/v1/admin/tenants/{id}/entitlement": {
       "get": {
         "tags": [

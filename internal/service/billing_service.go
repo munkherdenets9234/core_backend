@@ -278,3 +278,63 @@ func (s *SubscriptionService) plan(ctx context.Context, planID primitive.ObjectI
 	}
 	return p, nil
 }
+
+// renewedEnd is the new period end after a renewal: one period beyond
+// whichever is later, today or the current end.
+//
+// Extending from the current end keeps the days a live tenant already paid
+// for. Extending from today when the subscription has lapsed stops a renewal
+// of a long-dead subscription from landing in the past and leaving the tenant
+// still expired. This is what separates Renew from Change plan, which restarts
+// the period from today and so throws the remaining days away.
+func renewedEnd(now, currentEnd time.Time, periodDays int) time.Time {
+	base := currentEnd
+	if base.Before(now) {
+		base = now
+	}
+	return base.AddDate(0, 0, periodDays)
+}
+
+// renewable reports whether a subscription may be renewed. Only a cancelled
+// one may not: cancelling is a deliberate act, and renewing it quietly would
+// erase the fact that the tenant was cancelled on purpose. Change plan is the
+// explicit way back.
+func renewable(status models.SubscriptionStatus) bool {
+	return status != models.SubscriptionCanceled
+}
+
+// periodFor is the length of one renewal. A plan deleted out from under a live
+// subscription, or one that never set a period, renews by the default rather
+// than by zero days.
+func periodFor(plan *models.Plan) int {
+	if plan == nil {
+		return models.DefaultPeriodDays
+	}
+	return plan.Period()
+}
+
+// Renew extends a subscription by one plan period, keeping the plan and the
+// period start.
+//
+// It reads the plan through Get rather than the plan() helper because that
+// helper rejects an inactive plan, and an existing subscription on a plan
+// that has since been retired must still be renewable.
+func (s *SubscriptionService) Renew(ctx context.Context, tenantID primitive.ObjectID, userID *primitive.ObjectID) (*models.Subscription, error) {
+	sub, err := s.Get(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if !renewable(sub.Status) {
+		return nil, apierr.Conflict("subscription is canceled — use Change plan to reactivate it").
+			In(apierr.DomainSubscription)
+	}
+
+	newEnd := renewedEnd(time.Now(), sub.CurrentPeriodEnd, periodFor(sub.Plan))
+	if err := s.repo.ExtendPeriod(ctx, tenantID, newEnd, userID); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, apierr.NotFound("subscription")
+		}
+		return nil, apierr.Internal(err)
+	}
+	return s.Get(ctx, tenantID)
+}

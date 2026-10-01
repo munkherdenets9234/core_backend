@@ -224,3 +224,17 @@ func (h *tenantsController) tenantAndPlanID(c *gin.Context) (tenantID, planID pr
 	}
 	return tenantID, planID, nil
 }
+
+// RenewSubscription extends the tenant's subscription by one plan period.
+func (h *tenantsController) RenewSubscription(c *gin.Context) error {
+	tenantID, err := h.tenantID(c)
+	if err != nil {
+		return err
+	}
+	sub, err := h.subs.Renew(c.Request.Context(), tenantID, apictx.ActorID(c))
+	if err != nil {
+		return err
+	}
+	response.OK(c, view.SubscriptionOf(sub))
+	return nil
+}
