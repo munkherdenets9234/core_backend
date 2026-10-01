@@ -44,6 +44,10 @@ type App struct {
 
 	// stopJobs cancels the background jobs. Nil when none were started.
 	stopJobs context.CancelFunc
+
+	// passwordReset sends its mail in the background, so shutdown drains it:
+	// a reset requested a moment before a restart should still arrive.
+	passwordReset *service.PasswordResetService
 }
 
 // New wires everything from cfg. It returns an error rather than exiting so a
@@ -116,6 +120,7 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 
 	limiter := middleware.NewRateLimiter()
 	mail := buildMailer(cfg, log)
+	passwordResetSvc := service.NewPasswordResetService(platformUsers, passwordResets, mail, log)
 
 	srv := api.NewServer(api.Deps{
 		Config: cfg,
@@ -132,7 +137,7 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 		Plan:          service.NewPlanService(plans),
 		Subscription:  service.NewSubscriptionService(subscriptions, plans),
 		PlatformUser:  platformUserSvc,
-		PasswordReset: service.NewPasswordResetService(platformUsers, passwordResets, mail, log),
+		PasswordReset: passwordResetSvc,
 		ServiceClient: service.NewServiceClientService(serviceClients),
 		Entitlement:   service.NewEntitlementService(tenants, subscriptions, plans),
 		Showcase:      service.NewShowcaseService(tenantDetails, tenants),
@@ -156,6 +161,8 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 		Engine:   srv.Handler(),
 		limiter:  limiter,
 		stopJobs: stopJobs,
+
+		passwordReset: passwordResetSvc,
 	}, nil
 }
 
@@ -199,6 +206,9 @@ func (a *App) Run() error {
 func (a *App) Close(ctx context.Context) {
 	if a.stopJobs != nil {
 		a.stopJobs()
+	}
+	if a.passwordReset != nil {
+		a.passwordReset.Drain()
 	}
 	if a.limiter != nil {
 		a.limiter.Close()

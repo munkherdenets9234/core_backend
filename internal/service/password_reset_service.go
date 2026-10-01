@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/eandstravel/tenantcore/internal/models"
@@ -71,7 +72,18 @@ type PasswordResetService struct {
 	resets resetStore
 	mail   sender
 	log    *zap.Logger
+
+	// sending tracks mail being sent in the background, so Drain can wait for it.
+	sending sync.WaitGroup
 }
+
+// Drain waits for every mail Request started in the background to finish.
+//
+// Request does not wait for SMTP (see Request), so a mail can still be in flight
+// when the process is asked to stop. Draining at shutdown means a reset
+// requested a moment before a restart is still delivered; tests use it to check
+// what was sent.
+func (s *PasswordResetService) Drain() { s.sending.Wait() }
 
 func NewPasswordResetService(
 	users resetUserSource,
@@ -135,18 +147,29 @@ func (s *PasswordResetService) Request(ctx context.Context, email string) error 
 		return apierr.Internal(err)
 	}
 
-	if err := s.mail.Send(email, mailer.TemplatePasswordResetCode, map[string]string{
+	// Sent in the background, and this is not an optimisation. SMTP takes
+	// seconds and an unknown address sends nothing, so waiting for the send made
+	// a real account answer about 1.7s later than a fake one on a live request:
+	// an account-existence oracle that the identical response body was supposed
+	// to prevent. Returning as soon as the code is stored makes the two paths
+	// differ by a database write, not by a network round trip.
+	//
+	// The cost is that a failed send cannot be reported to the caller, which was
+	// already true (reporting it would be an oracle of its own). It is logged.
+	data := map[string]string{
 		"app":        AppName,
 		"name":       user.Name,
 		"code":       code,
 		"expires_in": "10 minutes",
-	}); err != nil {
-		// Reported, not returned. Returning it would turn "the SMTP server
-		// hiccuped" into a different response for a real address than for a
-		// fake one, handing back the oracle this endpoint just avoided.
-		s.log.Error("password reset code could not be mailed",
-			zap.String("email", email), zap.Error(err))
 	}
+	s.sending.Add(1)
+	go func() {
+		defer s.sending.Done()
+		if err := s.mail.Send(email, mailer.TemplatePasswordResetCode, data); err != nil {
+			s.log.Error("password reset code could not be mailed",
+				zap.String("email", email), zap.Error(err))
+		}
+	}()
 	return nil
 }
 

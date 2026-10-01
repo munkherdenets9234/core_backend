@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -107,6 +108,15 @@ func (f *fakeMail) Send(to string, tmpl mailer.Template, data map[string]string)
 
 const testEmail = "munkherdene.ts9234@gmail.com"
 
+// request runs Request and then waits for the mail it sends in the background.
+// Request deliberately does not wait for SMTP (see TestRequest_DoesNotWaitForTheMail),
+// so a test that checks what was sent has to wait for it explicitly.
+func request(svc *PasswordResetService, email string) error {
+	err := svc.Request(context.Background(), email)
+	svc.Drain()
+	return err
+}
+
 func newFixture(status models.PlatformUserStatus) (*PasswordResetService, *fakeUsers, *fakeResets, *fakeMail) {
 	users := &fakeUsers{byEmail: map[string]*models.PlatformUser{
 		testEmail: {ID: primitive.NewObjectID(), Name: "Munkh-Erdene", Email: testEmail, Status: status},
@@ -119,7 +129,7 @@ func newFixture(status models.PlatformUserStatus) (*PasswordResetService, *fakeU
 func TestRequestMailsACodeToAnActiveAdmin(t *testing.T) {
 	svc, _, resets, mail := newFixture(models.PlatformUserActive)
 
-	if err := svc.Request(context.Background(), testEmail); err != nil {
+	if err := request(svc, testEmail); err != nil {
 		t.Fatalf("Request: %v", err)
 	}
 	if len(mail.sent) != 1 {
@@ -153,7 +163,7 @@ func TestRequestMailsACodeToAnActiveAdmin(t *testing.T) {
 func TestRequestRevealsNothingAboutTheAccount(t *testing.T) {
 	t.Run("unknown address", func(t *testing.T) {
 		svc, _, _, mail := newFixture(models.PlatformUserActive)
-		if err := svc.Request(context.Background(), "nobody@example.com"); err != nil {
+		if err := request(svc, "nobody@example.com"); err != nil {
 			t.Fatalf("an unknown address must not error, got %v", err)
 		}
 		if len(mail.sent) != 0 {
@@ -163,7 +173,7 @@ func TestRequestRevealsNothingAboutTheAccount(t *testing.T) {
 
 	t.Run("suspended account", func(t *testing.T) {
 		svc, _, _, mail := newFixture(models.PlatformUserSuspended)
-		if err := svc.Request(context.Background(), testEmail); err != nil {
+		if err := request(svc, testEmail); err != nil {
 			t.Fatalf("a suspended account must not error, got %v", err)
 		}
 		if len(mail.sent) != 0 {
@@ -177,14 +187,14 @@ func TestRequestRevealsNothingAboutTheAccount(t *testing.T) {
 func TestRequestReportsWhenMailIsOff(t *testing.T) {
 	svc, _, _, mail := newFixture(models.PlatformUserActive)
 	mail.available = false
-	if err := svc.Request(context.Background(), testEmail); err == nil {
+	if err := request(svc, testEmail); err == nil {
 		t.Fatal("expected an error when mail is not configured")
 	}
 }
 
 func TestConfirmSetsThePasswordAndConsumesTheCode(t *testing.T) {
 	svc, users, resets, mail := newFixture(models.PlatformUserActive)
-	if err := svc.Request(context.Background(), testEmail); err != nil {
+	if err := request(svc, testEmail); err != nil {
 		t.Fatalf("Request: %v", err)
 	}
 	code := mail.sent[0].data["code"]
@@ -217,7 +227,7 @@ func TestConfirmSetsThePasswordAndConsumesTheCode(t *testing.T) {
 // Replay. A consumed code must not work twice.
 func TestConfirmRejectsAReusedCode(t *testing.T) {
 	svc, _, _, mail := newFixture(models.PlatformUserActive)
-	_ = svc.Request(context.Background(), testEmail)
+	_ = request(svc, testEmail)
 	code := mail.sent[0].data["code"]
 
 	if err := svc.Confirm(context.Background(), testEmail, code, "a-new-strong-password"); err != nil {
@@ -230,7 +240,7 @@ func TestConfirmRejectsAReusedCode(t *testing.T) {
 
 func TestConfirmRejectsAnExpiredCode(t *testing.T) {
 	svc, _, resets, mail := newFixture(models.PlatformUserActive)
-	_ = svc.Request(context.Background(), testEmail)
+	_ = request(svc, testEmail)
 	code := mail.sent[0].data["code"]
 	resets.current.ExpiresAt = time.Now().Add(-time.Minute)
 
@@ -243,7 +253,7 @@ func TestConfirmRejectsAnExpiredCode(t *testing.T) {
 // ten-minute window is a few minutes of scripted requests.
 func TestConfirmBurnsTheCodeAfterTooManyWrongGuesses(t *testing.T) {
 	svc, _, resets, mail := newFixture(models.PlatformUserActive)
-	_ = svc.Request(context.Background(), testEmail)
+	_ = request(svc, testEmail)
 	code := mail.sent[0].data["code"]
 
 	for i := 0; i < models.MaxResetAttempts; i++ {
@@ -265,7 +275,7 @@ func TestConfirmBurnsTheCodeAfterTooManyWrongGuesses(t *testing.T) {
 // map of which addresses have accounts and which codes were close.
 func TestConfirmFailuresAreIndistinguishable(t *testing.T) {
 	svc, _, _, mail := newFixture(models.PlatformUserActive)
-	_ = svc.Request(context.Background(), testEmail)
+	_ = request(svc, testEmail)
 
 	wrongCode := svc.Confirm(context.Background(), testEmail, "000000", "a-new-strong-password")
 	noAccount := svc.Confirm(context.Background(), "nobody@example.com", "000000", "a-new-strong-password")
@@ -283,7 +293,7 @@ func TestConfirmFailuresAreIndistinguishable(t *testing.T) {
 // what the caller typed, not whether the account exists.
 func TestConfirmRejectsAShortPassword(t *testing.T) {
 	svc, _, _, mail := newFixture(models.PlatformUserActive)
-	_ = svc.Request(context.Background(), testEmail)
+	_ = request(svc, testEmail)
 	code := mail.sent[0].data["code"]
 
 	if err := svc.Confirm(context.Background(), testEmail, code, "short"); err == nil {
@@ -295,7 +305,7 @@ func TestConfirmRejectsAShortPassword(t *testing.T) {
 // can be confirmed as typed in lowercase — and vice versa.
 func TestEmailIsCaseInsensitive(t *testing.T) {
 	svc, _, _, mail := newFixture(models.PlatformUserActive)
-	if err := svc.Request(context.Background(), "  Munkherdene.TS9234@Gmail.com  "); err != nil {
+	if err := request(svc, "  Munkherdene.TS9234@Gmail.com  "); err != nil {
 		t.Fatalf("Request: %v", err)
 	}
 	if len(mail.sent) != 1 {
@@ -304,5 +314,56 @@ func TestEmailIsCaseInsensitive(t *testing.T) {
 	code := mail.sent[0].data["code"]
 	if err := svc.Confirm(context.Background(), testEmail, code, "a-new-strong-password"); err != nil {
 		t.Fatalf("Confirm: %v", err)
+	}
+}
+
+// blockingMail holds every Send until released, like an SMTP server that is slow
+// to answer, and records what it was asked to send.
+type blockingMail struct {
+	release chan struct{}
+	mu      sync.Mutex
+	sent    []sentMail
+}
+
+func (b *blockingMail) Available() bool { return true }
+func (b *blockingMail) Send(to string, tmpl mailer.Template, data map[string]string) error {
+	<-b.release
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sent = append(b.sent, sentMail{to, tmpl, data})
+	return nil
+}
+
+// The response time of an unauthenticated endpoint must not depend on whether
+// the address has an account. Sending takes seconds over SMTP and an unknown
+// address sends nothing, so waiting for the send made "real account" and "no
+// account" differ by about 1.7 seconds on a live request: an account-existence
+// oracle that the identical 200 body was supposed to prevent.
+func TestRequest_DoesNotWaitForTheMail(t *testing.T) {
+	users := &fakeUsers{byEmail: map[string]*models.PlatformUser{
+		testEmail: {ID: primitive.NewObjectID(), Name: "Munkh-Erdene", Email: testEmail, Status: models.PlatformUserActive},
+	}}
+	mail := &blockingMail{release: make(chan struct{})}
+	svc := NewPasswordResetService(users, &fakeResets{}, mail, zap.NewNop())
+
+	done := make(chan error, 1)
+	go func() { done <- svc.Request(context.Background(), testEmail) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Request: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Request waited for the mail to be sent: its response time now reveals whether the account exists")
+	}
+
+	// The mail must still go out once the slow send completes.
+	close(mail.release)
+	svc.Drain()
+	mail.mu.Lock()
+	defer mail.mu.Unlock()
+	if len(mail.sent) != 1 || mail.sent[0].tmpl != mailer.TemplatePasswordResetCode {
+		t.Fatalf("sent = %+v, want exactly one password_reset_code mail after the send completed", mail.sent)
 	}
 }
