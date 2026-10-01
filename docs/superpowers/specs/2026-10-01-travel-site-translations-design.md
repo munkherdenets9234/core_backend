@@ -25,7 +25,7 @@ Collection `site_pages`, one document per `(tenant_id, page)`, unique index on t
 { tenant_id, page, entries: [ { path, values: { en?, mn?, ko? } } ], updated_at, user_id }
 ```
 
-`page` is a top-level key of the locale files (`hero`, `footer`, `tourDetail`, …). `path` is the dotted route inside it (`hero.title`; here `path` is relative to the file, so `hero.title` lives on page `hero`). Entries are a list, not a map, so that no BSON field name contains a dot.
+`page` is a top-level key of the locale files (`hero`, `footer`, `tourDetail`, …). `path` is the dotted route inside that page: the string `hero.title` in the JSON is page `hero`, path `title`; `tourDetail.itinerary.day_label` is page `tourDetail`, path `itinerary.day_label`. Entries are a list, not a map, so that no BSON field name contains a dot.
 
 ### Validation (digitalservice)
 
