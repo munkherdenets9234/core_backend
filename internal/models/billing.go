@@ -177,6 +177,14 @@ type Subscription struct {
 
 	UserID *primitive.ObjectID `bson:"user_id,omitempty" json:"user_id,omitempty"`
 
+	// ExpiryNoticeFor is the current_period_end a warning has already been
+	// claimed for. It holds the DATE rather than a boolean on purpose: renewing
+	// or changing plan moves current_period_end, so the marker stops matching
+	// and the next period is warned about with no reset step anywhere.
+	//
+	// Internal bookkeeping, so it is not part of the wire contract.
+	ExpiryNoticeFor *time.Time `bson:"expiry_notice_for,omitempty" json:"-"`
+
 	// Plan is resolved on read by the service layer, not persisted. Left nil
 	// if the plan was deleted out from under the subscription — which does
 	// not invalidate the billing state and must not fail the read.
