@@ -106,35 +106,68 @@ func NewPasswordResetService(
 // guessing passwords or writing a phishing mail. The cost is that a genuine
 // typo looks like success; the log line below is how an operator tells the
 // two apart, and it stays on our side of the wire.
-func (s *PasswordResetService) Request(ctx context.Context, email string) error {
+func (s *PasswordResetService) Request(_ context.Context, email string) error {
 	email = normalizeEmail(email)
 
 	// Mail being unconfigured IS worth reporting: nothing the caller does
 	// will ever produce a code, and pretending otherwise leaves someone
-	// waiting for an email that cannot arrive.
+	// waiting for an email that cannot arrive. This depends on configuration
+	// only, never on the account, so it does not leak anything.
 	if !s.mail.Available() {
 		return apierr.FeatureUnavailable("email")
 	}
 
+	// EVERYTHING that depends on the account happens in the background, and that
+	// is the point of the shape of this function.
+	//
+	// The response body is identical for a real and an unknown address, but a
+	// response TIME that differs is just as much an oracle. Waiting for the SMTP
+	// send made a real account answer about 1.7s later than a fake one on a live
+	// request; once the send moved out, the lookup, the code insert and the
+	// invalidation of the old code (database round trips an unknown address
+	// skips) still left it about 250ms slower, which is averaged out in a few
+	// dozen requests. So nothing account-dependent runs before this returns, and
+	// both paths do the same amount of work here: none.
+	//
+	// The cost is that a failure inside cannot be reported to the caller, which
+	// was already true of a failed send (reporting either is an oracle of its
+	// own). Everything is logged instead.
+	s.sending.Add(1)
+	go func() {
+		defer s.sending.Done()
+		// The request's context is cancelled the moment the handler returns, so
+		// the background work gets its own, bounded one.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		s.issue(ctx, email)
+	}()
+	return nil
+}
+
+// issue looks the account up, stores a code and mails it. It runs after the
+// response has been sent, so it logs rather than returns.
+func (s *PasswordResetService) issue(ctx context.Context, email string) {
 	user, err := s.users.FindByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			s.log.Info("password reset requested for an unknown address", zap.String("email", email))
-			return nil
+			return
 		}
-		return apierr.Internal(err)
+		s.log.Error("password reset: account lookup failed", zap.String("email", email), zap.Error(err))
+		return
 	}
 	if user.Status != models.PlatformUserActive {
 		// A suspended admin getting back in via email is precisely what
 		// suspension exists to prevent.
 		s.log.Warn("password reset requested for a non-active account",
 			zap.String("email", email), zap.String("status", string(user.Status)))
-		return nil
+		return
 	}
 
 	code, err := generateCode()
 	if err != nil {
-		return apierr.Internal(err)
+		s.log.Error("password reset: could not generate a code", zap.Error(err))
+		return
 	}
 
 	reset := &models.PasswordReset{
@@ -144,33 +177,19 @@ func (s *PasswordResetService) Request(ctx context.Context, email string) error 
 		ExpiresAt: time.Now().Add(CodeTTL),
 	}
 	if err := s.resets.Create(ctx, reset); err != nil {
-		return apierr.Internal(err)
+		s.log.Error("password reset: could not store the code", zap.String("email", email), zap.Error(err))
+		return
 	}
 
-	// Sent in the background, and this is not an optimisation. SMTP takes
-	// seconds and an unknown address sends nothing, so waiting for the send made
-	// a real account answer about 1.7s later than a fake one on a live request:
-	// an account-existence oracle that the identical response body was supposed
-	// to prevent. Returning as soon as the code is stored makes the two paths
-	// differ by a database write, not by a network round trip.
-	//
-	// The cost is that a failed send cannot be reported to the caller, which was
-	// already true (reporting it would be an oracle of its own). It is logged.
-	data := map[string]string{
+	if err := s.mail.Send(email, mailer.TemplatePasswordResetCode, map[string]string{
 		"app":        AppName,
 		"name":       user.Name,
 		"code":       code,
 		"expires_in": "10 minutes",
+	}); err != nil {
+		s.log.Error("password reset code could not be mailed",
+			zap.String("email", email), zap.Error(err))
 	}
-	s.sending.Add(1)
-	go func() {
-		defer s.sending.Done()
-		if err := s.mail.Send(email, mailer.TemplatePasswordResetCode, data); err != nil {
-			s.log.Error("password reset code could not be mailed",
-				zap.String("email", email), zap.Error(err))
-		}
-	}()
-	return nil
 }
 
 // Confirm verifies a code and sets the new password.

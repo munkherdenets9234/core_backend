@@ -367,3 +367,48 @@ func TestRequest_DoesNotWaitForTheMail(t *testing.T) {
 		t.Fatalf("sent = %+v, want exactly one password_reset_code mail after the send completed", mail.sent)
 	}
 }
+
+// slowUsers blocks the account lookup, like a database that is slow to answer.
+type slowUsers struct {
+	*fakeUsers
+	release chan struct{}
+}
+
+func (s slowUsers) FindByEmail(ctx context.Context, email string) (*models.PlatformUser, error) {
+	<-s.release
+	return s.fakeUsers.FindByEmail(ctx, email)
+}
+
+// Not waiting for the mail is not enough: looking the account up, storing the
+// code and invalidating the old one are database round trips that an unknown
+// address skips, and on a live request they still left a real account about
+// 250ms slower. The response must not depend on the account at all, so none of
+// that work may happen before Request returns.
+func TestRequest_ResponseDoesNotDependOnTheAccountLookup(t *testing.T) {
+	users := slowUsers{
+		fakeUsers: &fakeUsers{byEmail: map[string]*models.PlatformUser{
+			testEmail: {ID: primitive.NewObjectID(), Name: "Munkh-Erdene", Email: testEmail, Status: models.PlatformUserActive},
+		}},
+		release: make(chan struct{}),
+	}
+	mail := &fakeMail{available: true}
+	svc := NewPasswordResetService(users, &fakeResets{}, mail, zap.NewNop())
+
+	done := make(chan error, 1)
+	go func() { done <- svc.Request(context.Background(), testEmail) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Request: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Request waited for the account lookup: its response time reveals whether the account exists")
+	}
+
+	close(users.release)
+	svc.Drain()
+	if len(mail.sent) != 1 {
+		t.Fatalf("mails = %d, want 1 once the lookup finished", len(mail.sent))
+	}
+}
