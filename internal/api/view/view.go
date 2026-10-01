@@ -217,6 +217,10 @@ type Subscription struct {
 	CurrentPeriodStart time.Time  `json:"current_period_start"`
 	CurrentPeriodEnd   time.Time  `json:"current_period_end"`
 	CanceledAt         *time.Time `json:"canceled_at,omitempty"`
+	// BillingDay is the day of the month the subscription renews on. It is
+	// always present: the API reports what the system will act on, so a
+	// subscription with none stored reads as the default rather than as zero.
+	BillingDay int `json:"billing_day"`
 	// Plan is nil when the plan was deleted out from under the
 	// subscription — which is a real state, not an error. See
 	// SubscriptionService.Get.
@@ -232,6 +236,7 @@ func SubscriptionOf(s *models.Subscription) Subscription {
 		CurrentPeriodStart: s.CurrentPeriodStart,
 		CurrentPeriodEnd:   s.CurrentPeriodEnd,
 		CanceledAt:         s.CanceledAt,
+		BillingDay:         s.EffectiveBillingDay(),
 	}
 	if s.Plan != nil {
 		p := PlanOf(s.Plan)
