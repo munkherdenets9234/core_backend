@@ -331,7 +331,7 @@ git commit -m "feat: add POST /admin/tenants/:id/subscription/renew"
 Run: `go test ./internal/service/ -run "BillingAlignedEnd|EffectiveBillingDay|ValidBillingDay|RenewedEnd" -count=1`
 Expected: FAIL (undefined, then a wrong `renewedEnd` result).
 
-- [ ] **Step 3: Implement** the model field, `EffectiveBillingDay`, `billingAlignedEnd` (earliest = base + max(24h, periodDays/2 days); first billing-day date at 00:00 UTC on or after it; plus `max(1, (periodDays+15)/30) - 1` months), `validBillingDay`, the changed `renewedEnd`/`Create`/`UpdatePlan`, `SetBillingDay` at both layers, the handler and route. `UpdatePlan` and `Create` keep their existing 404/409 behaviour. The create handler reads an optional `billing_day` and rejects an invalid one with `400`.
+- [ ] **Step 3: Implement** the model field, `EffectiveBillingDay`, `billingAlignedEnd` (earliest = base + min(15 days, max(24h, periodDays/2 days)); first billing-day date at 00:00 UTC on or after it; plus `max(1, (periodDays+15)/30) - 1` months), `validBillingDay`, the changed `renewedEnd`/`Create`/`UpdatePlan`, `SetBillingDay` at both layers, the handler and route. `UpdatePlan` and `Create` keep their existing 404/409 behaviour. The create handler reads an optional `billing_day` and rejects an invalid one with `400`.
 
 - [ ] **Step 4: Document.** Add the new route to `docs/api.json`, add `billing_day` to the `Subscription` schema and to the create body, and update the descriptions of renew, create and change-plan to state the billing-day rule. Preserve CRLF.
 

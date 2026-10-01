@@ -7,25 +7,25 @@ import (
 	"github.com/eandstravel/tenantcore/internal/models"
 )
 
-var renewNow = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-
-func day(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
-
 // Renewing a live subscription must keep the days the tenant already paid for;
-// renewing a lapsed one starts from today, not from a date in the past.
+// renewing a lapsed one starts from today, not from a date in the past. Both now
+// land on the billing day instead of drifting by 30 days each time.
 func TestRenewedEnd(t *testing.T) {
 	cases := []struct {
 		name       string
+		now        time.Time
 		currentEnd time.Time
 		want       time.Time
 	}{
-		{"live keeps its remaining days", renewNow.Add(day(20)), renewNow.Add(day(50))},
-		{"lapsed renews from today", renewNow.Add(-day(10)), renewNow.Add(day(30))},
-		{"ending exactly now renews from today", renewNow, renewNow.Add(day(30))},
+		// E&S before it was moved: it ended 31 Oct, which is not the 20th.
+		{"live, ending 31 Oct", utc(2026, 10, 1, 12, 0), utc(2026, 10, 31, 4, 12), utc(2026, 11, 20, 0, 0)},
+		{"live, ending on the day", utc(2026, 10, 1, 12, 0), utc(2026, 10, 20, 0, 0), utc(2026, 11, 20, 0, 0)},
+		{"lapsed renews from today", utc(2026, 10, 3, 12, 0), utc(2026, 8, 1, 0, 0), utc(2026, 10, 20, 0, 0)},
+		{"ending exactly now renews from today", utc(2026, 10, 20, 0, 0), utc(2026, 10, 20, 0, 0), utc(2026, 11, 20, 0, 0)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := renewedEnd(renewNow, tc.currentEnd, 30); !got.Equal(tc.want) {
+			if got := renewedEnd(tc.now, tc.currentEnd, 30, 20); !got.Equal(tc.want) {
 				t.Fatalf("renewedEnd = %v, want %v", got, tc.want)
 			}
 		})

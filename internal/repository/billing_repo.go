@@ -268,3 +268,20 @@ func (r *SubscriptionRepo) ExtendPeriod(ctx context.Context, tenantID primitive.
 	}
 	return nil
 }
+
+// SetBillingDay records the day a subscription renews on. It does not move the
+// current period: see SubscriptionService.SetBillingDay.
+func (r *SubscriptionRepo) SetBillingDay(ctx context.Context, tenantID primitive.ObjectID, day int, userID *primitive.ObjectID) error {
+	set := bson.M{"billing_day": day, "updated_at": time.Now()}
+	if userID != nil {
+		set["user_id"] = userID
+	}
+	res, err := r.col.UpdateOne(ctx, bson.M{"tenant_id": tenantID}, bson.M{"$set": set})
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
+}

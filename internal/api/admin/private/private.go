@@ -54,6 +54,7 @@ func Register(base *gin.RouterGroup, d Deps) {
 	t.PUT("/:id/subscription/plan", tenants.UpdateSubscriptionPlan)
 	t.POST("/:id/subscription/cancel", tenants.CancelSubscription)
 	t.POST("/:id/subscription/renew", tenants.RenewSubscription)
+	t.PUT("/:id/subscription/billing-day", tenants.SetSubscriptionBillingDay)
 	// The entitlement a product service would receive for this tenant,
 	// rendered for a human. Being able to see exactly what carwash sees,
 	// without impersonating carwash, is what turns "the customer says the

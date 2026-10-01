@@ -562,7 +562,7 @@
         ],
         "operationId": "createTenantSubscription",
         "summary": "Subscribe a tenant to a plan",
-        "description": "One subscription per tenant, enforced by a unique index — a tenant who wants two products holds ONE subscription whose plan lists both modules, not two subscriptions. The billing period starts now and runs for the plan's `period_days`. The plan must be active; subscribing to a retired plan is a 422.",
+        "description": "One subscription per tenant, enforced by a unique index — a tenant who wants two products holds ONE subscription whose plan lists both modules, not two subscriptions. The billing period starts now and runs for the plan's `period_days`. The plan must be active; subscribing to a retired plan is a 422. The first period ends at 00:00 UTC on the subscription's **billing day** (1 to 28, default 20): the first billing-day date at least half a month (15 days, or half the period for a plan shorter than a month) after the starting point, with whole months added for plans longer than one. The first period after moving onto a billing day can therefore be shorter than a month; every one after lands on the day.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ObjectId"
@@ -644,7 +644,7 @@
         ],
         "operationId": "changeTenantPlan",
         "summary": "Move a tenant onto a different plan",
-        "description": "Restarts the current billing period from now, for `period_days` of the NEW plan — a mid-period upgrade does not prorate. That is a known gap (see `Not done yet` in the README) and the first thing to fix once a payment provider exists.",
+        "description": "Restarts the current billing period from now, for `period_days` of the NEW plan — a mid-period upgrade does not prorate. That is a known gap (see `Not done yet` in the README) and the first thing to fix once a payment provider exists. The new period ends at 00:00 UTC on the subscription's **billing day** (1 to 28, default 20): the first billing-day date at least half a month (15 days, or half the period for a plan shorter than a month) after the starting point, with whole months added for plans longer than one. The first period after moving onto a billing day can therefore be shorter than a month; every one after lands on the day. The subscription's existing billing day is kept, so changing plan never quietly moves a tenant off the day they bill on.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ObjectId"
@@ -765,7 +765,7 @@
         ],
         "operationId": "renewTenantSubscription",
         "summary": "Extend a tenant's subscription by one plan period",
-        "description": "Pushes `current_period_end` out by one plan period (`plan.period_days`, or 30 when the plan sets none or has been deleted), keeps the plan and the period start, and sets the status to `active`. No request body: the length is always one period, and a custom length is deliberately not offered.\n\n**The new end is `max(now, current_period_end)` plus one period.** A live subscription keeps the days the tenant already paid for. A lapsed one renews from today, so renewing a long-dead subscription cannot land in the past and leave the tenant still expired.\n\nThis is not the same as `PUT /subscription/plan`, which restarts the period from today and so DISCARDS the days remaining. Use Renew to extend, Change plan to move between plans.\n\n**A cancelled subscription returns `409`.** Cancelling is a deliberate act, and renewing it quietly would erase the fact that the tenant was cancelled on purpose. Change plan reactivates it explicitly. `past_due` and `trialing` subscriptions can be renewed. `404` when the tenant has no subscription.\n\nRenewing also re-arms the seven-day expiry warning for the new period, with no reset step: the warning is keyed to the period end date, which has just moved.",
+        "description": "Extends the subscription to its next billing-day date, keeping the plan and the period start, and sets the status to `active`. No request body, and a custom length is deliberately not offered.\n\n**The starting point is `max(now, current_period_end)`.** A live subscription keeps the days the tenant already paid for. A lapsed one renews from today, so renewing a long-dead subscription cannot land in the past and leave the tenant still expired. The new end falls at 00:00 UTC on the subscription's **billing day** (1 to 28, default 20): the first billing-day date at least half a month (15 days, or half the period for a plan shorter than a month) after the starting point, with whole months added for plans longer than one. The first period after moving onto a billing day can therefore be shorter than a month; every one after lands on the day.\n\nThis is not the same as `PUT /subscription/plan`, which restarts the period from today and so DISCARDS the days remaining. Use Renew to extend, Change plan to move between plans.\n\n**A cancelled subscription returns `409`.** Cancelling is a deliberate act, and renewing it quietly would erase the fact that the tenant was cancelled on purpose. Change plan reactivates it explicitly. `past_due` and `trialing` subscriptions can be renewed. `404` when the tenant has no subscription.\n\nRenewing also re-arms the seven-day expiry warning for the new period, with no reset step: the warning is keyed to the period end date, which has just moved.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ObjectId"
@@ -799,6 +799,78 @@
           },
           "409": {
             "description": "The subscription is canceled; use Change plan to reactivate it"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/subscription/billing-day": {
+      "put": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "setSubscriptionBillingDay",
+        "summary": "Change the day of the month a subscription renews on",
+        "description": "Sets `billing_day` (1 to 28). **It changes future periods only and never moves `current_period_end`.** Moving the current end earlier would silently take days the tenant already paid for, so the new day applies from the next Renew, Change plan or Subscribe; Renew is how the current end moves.\n\n1 to 28 only: the 29th to 31st do not exist in every month, so a subscription anchored to one would drift in February. `400` outside that range, `404` when the tenant has no subscription.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "billing_day"
+                ],
+                "properties": {
+                  "billing_day": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 28,
+                    "example": 20
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The billing day that was set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "billing_day": {
+                              "type": "integer",
+                              "example": 20
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "billing_day is outside 1 to 28"
+          },
+          "404": {
+            "description": "No such tenant, or the tenant has no subscription"
           }
         }
       }
@@ -3219,6 +3291,13 @@
           "plan_id": {
             "type": "string",
             "pattern": "^[0-9a-fA-F]{24}$"
+          },
+          "billing_day": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 28,
+            "default": 20,
+            "description": "Optional, and read by Subscribe only: Change plan keeps the subscription's existing billing day and ignores this. The day of the month the subscription renews on; outside 1 to 28 is a `400`."
           }
         }
       },
@@ -3262,6 +3341,13 @@
                 "$ref": "#/components/schemas/Plan"
               }
             ]
+          },
+          "billing_day": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 28,
+            "example": 20,
+            "description": "The day of the month this subscription renews on. A subscription with none stored behaves as 20."
           }
         }
       },

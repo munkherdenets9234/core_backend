@@ -177,6 +177,11 @@ type Subscription struct {
 
 	UserID *primitive.ObjectID `bson:"user_id,omitempty" json:"user_id,omitempty"`
 
+	// BillingDay is the day of the month this subscription renews on, 1 to 28.
+	// Zero means none is stored, which is every subscription that predates the
+	// field; read it through EffectiveBillingDay, never directly.
+	BillingDay int `bson:"billing_day,omitempty" json:"billing_day"`
+
 	// ExpiryNoticeFor is the current_period_end a warning has already been
 	// claimed for. It holds the DATE rather than a boolean on purpose: renewing
 	// or changing plan moves current_period_end, so the marker stops matching
@@ -189,4 +194,18 @@ type Subscription struct {
 	// if the plan was deleted out from under the subscription — which does
 	// not invalidate the billing state and must not fail the read.
 	Plan *Plan `bson:"-" json:"plan,omitempty"`
+}
+
+// DefaultBillingDay is the day subscriptions renew on unless told otherwise.
+// The business bills on the 20th of the month.
+const DefaultBillingDay = 20
+
+// EffectiveBillingDay is the billing day to act on. A subscription with none
+// stored behaves as DefaultBillingDay, which is how every existing one keeps
+// working with no migration.
+func (s Subscription) EffectiveBillingDay() int {
+	if s.BillingDay == 0 {
+		return DefaultBillingDay
+	}
+	return s.BillingDay
 }

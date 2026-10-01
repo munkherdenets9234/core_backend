@@ -192,7 +192,14 @@ func NewSubscriptionService(repo *repository.SubscriptionRepo, planRepo *reposit
 // index — the duplicate key is translated here rather than leaking a driver
 // error, because "this tenant already has one" is a thing the console can
 // act on.
-func (s *SubscriptionService) Create(ctx context.Context, tenantID, planID primitive.ObjectID, userID *primitive.ObjectID) (*models.Subscription, error) {
+// Create subscribes a tenant to a plan. billingDay 0 means the default.
+func (s *SubscriptionService) Create(ctx context.Context, tenantID, planID primitive.ObjectID, billingDay int, userID *primitive.ObjectID) (*models.Subscription, error) {
+	if billingDay == 0 {
+		billingDay = models.DefaultBillingDay
+	}
+	if !validBillingDay(billingDay) {
+		return nil, apierr.BadRequest("billing_day must be between 1 and 28")
+	}
 	plan, err := s.plan(ctx, planID)
 	if err != nil {
 		return nil, err
@@ -203,8 +210,9 @@ func (s *SubscriptionService) Create(ctx context.Context, tenantID, planID primi
 		TenantID:           tenantID,
 		PlanID:             planID,
 		Status:             models.SubscriptionActive,
+		BillingDay:         billingDay,
 		CurrentPeriodStart: now,
-		CurrentPeriodEnd:   now.AddDate(0, 0, plan.Period()),
+		CurrentPeriodEnd:   billingAlignedEnd(now, plan.Period(), billingDay),
 	}
 	if err := s.repo.Create(ctx, sub, userID); err != nil {
 		if mongo.IsDuplicateKeyError(err) {
@@ -241,8 +249,18 @@ func (s *SubscriptionService) UpdatePlan(ctx context.Context, tenantID, planID p
 	if err != nil {
 		return err
 	}
+	// The subscription's own billing day decides where the new period ends, so
+	// changing plan does not quietly move a tenant off the day they bill on.
+	existing, err := s.repo.FindByTenantID(ctx, tenantID)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return apierr.NotFound("subscription")
+		}
+		return apierr.Internal(err)
+	}
 	now := time.Now()
-	if err := s.repo.UpdatePlan(ctx, tenantID, planID, now, now.AddDate(0, 0, plan.Period()), userID); err != nil {
+	end := billingAlignedEnd(now, plan.Period(), existing.EffectiveBillingDay())
+	if err := s.repo.UpdatePlan(ctx, tenantID, planID, now, end, userID); err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return apierr.NotFound("subscription")
 		}
@@ -279,21 +297,64 @@ func (s *SubscriptionService) plan(ctx context.Context, planID primitive.ObjectI
 	return p, nil
 }
 
-// renewedEnd is the new period end after a renewal: one period beyond
-// whichever is later, today or the current end.
+// renewedEnd is the new period end after a renewal: the billing-day date that
+// follows whichever is later, today or the current end.
 //
-// Extending from the current end keeps the days a live tenant already paid
-// for. Extending from today when the subscription has lapsed stops a renewal
-// of a long-dead subscription from landing in the past and leaving the tenant
-// still expired. This is what separates Renew from Change plan, which restarts
-// the period from today and so throws the remaining days away.
-func renewedEnd(now, currentEnd time.Time, periodDays int) time.Time {
+// Starting from the current end keeps the days a live tenant already paid for.
+// Starting from today when the subscription has lapsed stops a renewal of a
+// long-dead subscription from landing in the past and leaving the tenant still
+// expired. This is what separates Renew from Change plan, which restarts the
+// period from today and so throws the remaining days away.
+func renewedEnd(now, currentEnd time.Time, periodDays, billingDay int) time.Time {
 	base := currentEnd
 	if base.Before(now) {
 		base = now
 	}
-	return base.AddDate(0, 0, periodDays)
+	return billingAlignedEnd(base, periodDays, billingDay)
 }
+
+// billingAlignedEnd is the first billing-day date, at 00:00 UTC, that leaves a
+// full enough period after base. See "Billing day" in the design spec.
+//
+// The business bills on the 20th, so a subscription should end on the 20th and
+// stay there; "+30 days" drifts away from it a little more with every renewal.
+//
+// The floor, at most half a month, is what stops a renewal made just before the
+// billing day from producing a 5-day period: it asks for the NEXT billing day
+// that is at least 15 days away. It is capped at 15 days because for a long
+// plan the extra length comes from whole months added afterwards, not from the
+// floor. Uncapped, a 90-day plan would add 45 days here and then two more
+// months, landing about 123 days out.
+//
+// The first period after moving onto a billing day can therefore be shorter
+// than a month. Every one after it lands on the day.
+func billingAlignedEnd(base time.Time, periodDays, billingDay int) time.Time {
+	floor := time.Duration(periodDays) * 12 * time.Hour // half the period
+	if floor < 24*time.Hour {
+		floor = 24 * time.Hour // always strictly after base, however short the plan
+	}
+	if floor > 15*24*time.Hour {
+		floor = 15 * 24 * time.Hour
+	}
+	earliest := base.UTC().Add(floor)
+
+	end := time.Date(earliest.Year(), earliest.Month(), billingDay, 0, 0, 0, 0, time.UTC)
+	if end.Before(earliest) {
+		end = time.Date(earliest.Year(), earliest.Month()+1, billingDay, 0, 0, 0, 0, time.UTC)
+	}
+
+	months := (periodDays + 15) / 30 // a 90-day plan is three months
+	if months < 1 {
+		months = 1
+	}
+	// billingDay is at most 28, so the date exists in every month and
+	// time.Date's month overflow never has to roll a day over.
+	return time.Date(end.Year(), end.Month()+time.Month(months-1), billingDay, 0, 0, 0, 0, time.UTC)
+}
+
+// validBillingDay allows 1 to 28. The 29th to 31st do not exist in every month,
+// so a subscription anchored to one would drift in February.
+func validBillingDay(d int) bool { return d >= 1 && d <= 28 }
 
 // renewable reports whether a subscription may be renewed. Only a cancelled
 // one may not: cancelling is a deliberate act, and renewing it quietly would
@@ -329,7 +390,7 @@ func (s *SubscriptionService) Renew(ctx context.Context, tenantID primitive.Obje
 			In(apierr.DomainSubscription)
 	}
 
-	newEnd := renewedEnd(time.Now(), sub.CurrentPeriodEnd, periodFor(sub.Plan))
+	newEnd := renewedEnd(time.Now(), sub.CurrentPeriodEnd, periodFor(sub.Plan), sub.EffectiveBillingDay())
 	if err := s.repo.ExtendPeriod(ctx, tenantID, newEnd, userID); err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return nil, apierr.NotFound("subscription")
@@ -337,4 +398,22 @@ func (s *SubscriptionService) Renew(ctx context.Context, tenantID primitive.Obje
 		return nil, apierr.Internal(err)
 	}
 	return s.Get(ctx, tenantID)
+}
+
+// SetBillingDay changes the day a subscription renews on.
+//
+// It deliberately does not touch current_period_end. Moving the current end
+// earlier would silently take days the tenant already paid for; the new day
+// applies from the next renewal, and Renew is how the current end moves.
+func (s *SubscriptionService) SetBillingDay(ctx context.Context, tenantID primitive.ObjectID, day int, userID *primitive.ObjectID) error {
+	if !validBillingDay(day) {
+		return apierr.BadRequest("billing_day must be between 1 and 28")
+	}
+	if err := s.repo.SetBillingDay(ctx, tenantID, day, userID); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return apierr.NotFound("subscription")
+		}
+		return apierr.Internal(err)
+	}
+	return nil
 }

@@ -165,7 +165,10 @@ a migration.
 
 `billingAlignedEnd(base, periodDays, billingDay)`:
 
-1. `earliest = base + max(1 day, periodDays / 2 days)`: at least half a period.
+1. `earliest = base + min(15 days, max(1 day, periodDays / 2 days))`: at least
+   half a month, or half the period for a plan shorter than a month. The cap at
+   15 days matters for long plans: without it a 90-day plan would add 45 days
+   here and then two more months, landing about 123 days out.
 2. `end` is the first billing-day date at 00:00 UTC on or after `earliest`.
 3. For plans longer than one month, add whole months:
    `months = max(1, (periodDays + 15) / 30)`, and `end = end + (months - 1)`
