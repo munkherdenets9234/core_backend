@@ -41,6 +41,9 @@ type App struct {
 
 	mongo   *mongo.Client
 	limiter *middleware.RateLimiter
+
+	// stopJobs cancels the background jobs. Nil when none were started.
+	stopJobs context.CancelFunc
 }
 
 // New wires everything from cfg. It returns an error rather than exiting so a
@@ -145,11 +148,14 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 		zap.String("kid", maker.KeyID()),
 		zap.String("public_key", maker.PublicKeyB64()))
 
+	stopJobs := startExpiryNotice(cfg, log, subscriptions, tenants, plans, mail)
+
 	return &App{
-		Config:  cfg,
-		Log:     log,
-		Engine:  srv.Handler(),
-		limiter: limiter,
+		Config:   cfg,
+		Log:      log,
+		Engine:   srv.Handler(),
+		limiter:  limiter,
+		stopJobs: stopJobs,
 	}, nil
 }
 
@@ -191,12 +197,65 @@ func (a *App) Run() error {
 }
 
 func (a *App) Close(ctx context.Context) {
+	if a.stopJobs != nil {
+		a.stopJobs()
+	}
 	if a.limiter != nil {
 		a.limiter.Close()
 	}
 	if a.mongo != nil {
 		_ = a.mongo.Disconnect(ctx)
 	}
+}
+
+// expiryCheckInterval is how often subscriptions are checked for an approaching
+// end. The warning window is seven days, so hourly is far finer than it needs
+// to be; it is hourly so that a failed send is retried promptly rather than
+// the next day.
+const expiryCheckInterval = time.Hour
+
+// startExpiryNotice starts the hourly expiry check and returns the function
+// that stops it, or nil when the notice is not configured.
+//
+// Same rule as every optional dependency: a missing setting disables the
+// feature and says so, rather than stopping a platform four services depend
+// on. What is different is the consequence, which is why the disabled case is
+// a WARN that names it: a tenant loses write access when its subscription
+// lapses whether or not anyone was warned, so "off" means "silent lapses".
+func startExpiryNotice(
+	cfg *config.Config,
+	log *zap.Logger,
+	subs *repository.SubscriptionRepo,
+	tenants *repository.TenantRepo,
+	plans *repository.PlanRepo,
+	mail *mailer.Mailer,
+) context.CancelFunc {
+	if !cfg.ExpiryNoticeEnabled() {
+		log.Warn("expiry notice is off — EXPIRY_NOTICE_EMAIL is not set, or mail is off; " +
+			"subscriptions will lapse without warning")
+		return nil
+	}
+
+	notifier := service.NewExpiryNotifier(subs, tenants, plans, mail, cfg.ExpiryNoticeEmail, log)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go service.Every(ctx, expiryCheckInterval, func(ctx context.Context) {
+		sent, err := notifier.NotifyExpiring(ctx, time.Now())
+		switch {
+		case err != nil:
+			// The next tick retries; nothing was claimed.
+			log.Warn("expiry notice: check failed", zap.Error(err))
+		case sent > 0:
+			log.Info("expiry notice: warnings sent", zap.Int("sent", sent))
+		default:
+			log.Info("expiry notice: nothing to warn about")
+		}
+	})
+
+	log.Info("expiry notice ready",
+		zap.Duration("every", expiryCheckInterval),
+		zap.Duration("warn_window", service.ExpiryWarnWindow))
+	return cancel
 }
 
 // buildMailer returns the SMTP sender, or nil when no credentials are set.
