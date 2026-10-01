@@ -41,7 +41,7 @@ The site decides what a stored value means: it ignores an unknown path, and it i
 
 ## digitalservice API
 
-Admin (token, role `admin`, behind the subscription gate, like other content writes):
+Admin (bearer token, role `admin`, mounted in the existing gated `/admin` group). The subscription gate blocks only mutating methods, so a lapsed tenant can still read and open the editor, but cannot save. The list and get routes require the token too: unlike the older admin reads, they do not add another route that the public API key alone can call.
 
 | Route | Purpose |
 |---|---|
@@ -51,7 +51,7 @@ Admin (token, role `admin`, behind the subscription gate, like other content wri
 
 `PUT` replaces the whole page, as tenantcore's does, so removing an override is saving without it. It records `updated_at` and the acting user. The page is created if it does not exist.
 
-Public (X-API-Key only, behind the subscription gate, with the storefront reads):
+Public (X-API-Key only, in the storefront reads group; reads are never blocked by the gate):
 
 `GET /api/v1/translations?lang=en` returns `{ "<page>": { "<path>": <value> } }` for one language, omitting pages with nothing for that language. `lang` must be `en`, `mn` or `ko`, otherwise 400. A language with no overrides returns `{}`.
 
@@ -94,7 +94,7 @@ The editor therefore opens on the real current wording, and an unedited key is s
 
 ## Testing
 
-- digitalservice: unit tests for the validation rules (each limit, bad language, duplicate path, wrong value type), the replace semantics, tenant isolation (tenant A cannot read or write tenant B's page), the per-language public view, and that a lapsed subscription returns the same 402 as other gated routes. The service uses narrow interfaces and fakes, like the password reset service. Mutation-check the tenant-isolation and type rules.
+- digitalservice: unit tests for the validation rules (each limit, bad language, duplicate path, wrong value type), the replace semantics, tenant isolation (tenant A cannot read or write tenant B's page), the per-language public view, and that a lapsed subscription answers `PUT` with the same 402 as other gated routes while `GET` still works. The service uses narrow interfaces and fakes, like the password reset service. Mutation-check the tenant-isolation and type rules.
 - Site: unit tests for the merge (replaces a matching leaf; ignores an unknown path; ignores a type mismatch; does not mutate the shipped object; empty overrides return the shipped object; a failed fetch returns the shipped object). `tsc` and `eslint` clean.
 - Admin: `tsc`, `eslint`, then a click-through in the browser (list, edit a string, edit an array, save, reload, blank a language).
 - Live: seed a throwaway change on one string, confirm it shows on the site after the cache window, revert it.
@@ -102,5 +102,5 @@ The editor therefore opens on the real current wording, and an unedited key is s
 ## Risks
 
 - `getTranslation` becoming async touches many files. A missed `await` yields a Promise where an object is expected, which `tsc` catches.
-- A stored array override could have different item fields from the shipped one. The type check is shallow, so the site must also tolerate missing item fields; the editor edits arrays by shipped item shape.
+- A stored array override could have different item shape from the shipped one. The site's merge therefore checks arrays by item kind: if the shipped array's first item is a string, every override item must be a string; if it is an object, every override item must be an object whose keys include all of the shipped item's keys with string values. Otherwise the shipped array is kept.
 - An override equal to the shipped value is stored after seeding; later code edits to the JSON for that key will not show until the override is removed. Accepted for the first version.
