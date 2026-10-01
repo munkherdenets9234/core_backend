@@ -31,6 +31,12 @@ const (
 	// need to hear about immediately, and a reset flow with no notification
 	// gives a thief a silent takeover.
 	TemplatePasswordChanged Template = "password_changed"
+
+	// TemplateSubscriptionExpiring tells the platform operator that a
+	// tenant's subscription is about to lapse. Sent by the expiry notifier,
+	// not by a product service, so it carries the tenant and plan names
+	// rather than anything about a recipient's account.
+	TemplateSubscriptionExpiring Template = "subscription_expiring"
 )
 
 type templateDef struct {
@@ -77,6 +83,18 @@ It expires in {{expires_in}} and can be used once.
 
 If you did not ask to reset your password, ignore this message — your
 password has not changed. Nobody can use this code without it.
+`,
+	},
+	TemplateSubscriptionExpiring: {
+		subject:  "{{tenant}}: subscription ends in {{days_left}} days",
+		required: []string{"app", "tenant", "plan", "ends_on", "days_left"},
+		body: `The {{plan}} subscription for {{tenant}} ends on {{ends_on}}, in
+{{days_left}} days.
+
+Once it lapses, that tenant's writes start returning 402 until it is
+renewed. Reads keep working.
+
+Renew it from the {{app}}, on the tenant's Subscription page.
 `,
 	},
 	TemplatePasswordChanged: {

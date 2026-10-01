@@ -125,3 +125,41 @@ func TestNewReturnsNilWhenUnconfigured(t *testing.T) {
 		t.Fatal("sending on an unconfigured mailer must error, not silently succeed")
 	}
 }
+
+func TestSubscriptionExpiringRenders(t *testing.T) {
+	subject, body, err := render(TemplateSubscriptionExpiring, map[string]string{
+		"app":       "Inno Nomads Console",
+		"tenant":    "E and S Discovery Mongolia",
+		"plan":      "Travel Pro",
+		"ends_on":   "2026-10-31",
+		"days_left": "7",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, want := range []string{"E and S Discovery Mongolia", "7"} {
+		if !strings.Contains(subject, want) {
+			t.Fatalf("subject %q missing %q", subject, want)
+		}
+	}
+	for _, want := range []string{"2026-10-31", "Travel Pro"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(subject, "{{") || strings.Contains(body, "{{") {
+		t.Fatal("unsubstituted placeholder left in output")
+	}
+}
+
+func TestSubscriptionExpiringRequiresAllData(t *testing.T) {
+	_, _, err := render(TemplateSubscriptionExpiring, map[string]string{
+		"app": "X", "tenant": "Y", "plan": "Z", "ends_on": "2026-10-31",
+	})
+	if err == nil {
+		t.Fatal("expected an error when days_left is missing")
+	}
+	if !strings.Contains(err.Error(), "days_left") {
+		t.Fatalf("error should name the missing key, got %v", err)
+	}
+}

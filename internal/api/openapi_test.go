@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/eandstravel/tenantcore/pkg/mailer"
 )
 
 // docs/api.json is hand-written, and a hand-written spec drifts. This test is
@@ -141,5 +143,42 @@ func TestUndocumentedListIsNotStale(t *testing.T) {
 		if !served[key] {
 			t.Errorf("`undocumented` exempts %q, which the router does not serve", key)
 		}
+	}
+}
+
+// The template enum in the contract is hand-written, like the rest of the
+// spec, and drifts the same way: password_reset_code was added as a template
+// and never reached the enum. This pins the two together.
+func TestDocsTemplateEnumMatchesMailer(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "api.json"))
+	if err != nil {
+		t.Fatalf("read docs/api.json: %v", err)
+	}
+	var doc struct {
+		Paths map[string]map[string]struct {
+			RequestBody struct {
+				Content map[string]struct {
+					Schema struct {
+						Properties struct {
+							Template struct {
+								Enum []string `json:"enum"`
+							} `json:"template"`
+						} `json:"properties"`
+					} `json:"schema"`
+				} `json:"content"`
+			} `json:"requestBody"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse docs/api.json: %v", err)
+	}
+
+	op := doc.Paths["/api/v1/svc/notifications/email"]["post"]
+	got := append([]string(nil), op.RequestBody.Content["application/json"].Schema.Properties.Template.Enum...)
+	sort.Strings(got)
+	want := mailer.Names() // already sorted
+
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("docs template enum = %v, mailer templates = %v", got, want)
 	}
 }
