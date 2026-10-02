@@ -37,6 +37,15 @@ const (
 	// not by a product service, so it carries the tenant and plan names
 	// rather than anything about a recipient's account.
 	TemplateSubscriptionExpiring Template = "subscription_expiring"
+
+	// TemplateStaffInvite invites a person to a tenant's product. The invite
+	// link is minted by the product; fixed fields only, no free-text message,
+	// so the inviter cannot make our address say anything they like.
+	TemplateStaffInvite Template = "staff_invite"
+
+	// TemplateLeadNotification tells a tenant a visitor left an enquiry. The
+	// lead's fields are inserted into fixed positions, never as the body.
+	TemplateLeadNotification Template = "lead_notification"
 )
 
 type templateDef struct {
@@ -95,6 +104,35 @@ Once it lapses, that tenant's writes start returning 402 until it is
 renewed. Reads keep working.
 
 Renew it from the {{app}}, on the tenant's Subscription page.
+`,
+	},
+	TemplateStaffInvite: {
+		subject:  "{{inviter}} invited you to {{app}}",
+		required: []string{"app", "name", "inviter", "invite_url", "expires_in"},
+		body: `Hello {{name}},
+
+{{inviter}} invited you to join {{app}}.
+
+Open this link to accept and set your password:
+
+{{invite_url}}
+
+The invitation expires in {{expires_in}}. If you were not expecting it, you
+can ignore this message.
+`,
+	},
+	TemplateLeadNotification: {
+		subject:  "New enquiry for {{tenant}}: {{lead_name}}",
+		required: []string{"app", "tenant", "lead_name", "lead_contact", "listing", "lead_url"},
+		body: `A new enquiry arrived for {{tenant}} through {{app}}.
+
+From:     {{lead_name}}
+Contact:  {{lead_contact}}
+Listing:  {{listing}}
+
+Open it here:
+
+{{lead_url}}
 `,
 	},
 	TemplatePasswordChanged: {

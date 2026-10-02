@@ -45,6 +45,7 @@ func Register(base *gin.RouterGroup, d Deps) {
 	t.GET("/:id", tenants.Get)
 	t.PUT("/:id/status", tenants.UpdateStatus)
 	t.PUT("/:id/domain", tenants.UpdateDomain)
+	t.PUT("/:id/hosts", tenants.UpdateHosts)
 	t.POST("/:id/rotate-key", tenants.RotateAPIKey)
 	// The subscription lives under the tenant it belongs to: there is one
 	// per tenant, so it is a property of the tenant rather than a collection

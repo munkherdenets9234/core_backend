@@ -163,3 +163,35 @@ func TestSubscriptionExpiringRequiresAllData(t *testing.T) {
 		t.Fatalf("error should name the missing key, got %v", err)
 	}
 }
+
+func TestKnownTemplatesIncludeStaffInviteAndLeadNotification(t *testing.T) {
+	for _, name := range []string{"staff_invite", "lead_notification"} {
+		if _, ok := Known(name); !ok {
+			t.Errorf("template %q is not registered", name)
+		}
+	}
+
+	subject, body, err := render(TemplateStaffInvite, map[string]string{
+		"app": "Tower", "name": "Bat", "inviter": "Dorj", "invite_url": "https://x/accept?t=1", "expires_in": "7 days",
+	})
+	if err != nil {
+		t.Fatalf("staff_invite: %v", err)
+	}
+	if strings.Contains(subject+body, "{{") || !strings.Contains(body, "https://x/accept?t=1") {
+		t.Fatalf("staff_invite did not render fully: %q", body)
+	}
+
+	subject, body, err = render(TemplateLeadNotification, map[string]string{
+		"app": "Tower", "tenant": "Tower LLC", "lead_name": "Sara", "lead_contact": "99112233", "listing": "Unit 12A", "lead_url": "https://x/leads/1",
+	})
+	if err != nil {
+		t.Fatalf("lead_notification: %v", err)
+	}
+	if strings.Contains(subject+body, "{{") || !strings.Contains(body, "Unit 12A") {
+		t.Fatalf("lead_notification did not render fully: %q", body)
+	}
+
+	if _, _, err := render(TemplateLeadNotification, map[string]string{"app": "Tower"}); err == nil {
+		t.Fatal("missing data must be an error")
+	}
+}

@@ -256,3 +256,50 @@ func TestProducedEntitlementsAreNeverStale(t *testing.T) {
 		t.Error("the producing side must never mark an answer stale")
 	}
 }
+
+func (f *fakeTenants) FindByHost(_ context.Context, host string) (*models.Tenant, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	for _, t := range f.byID {
+		for _, h := range t.Hosts {
+			if h == host {
+				return t, nil
+			}
+		}
+	}
+	return nil, mongo.ErrNoDocuments
+}
+
+func TestForHostResolvesToTheOwningTenant(t *testing.T) {
+	tenant := activeTenant()
+	tenant.Hosts = []string{"tower.example.com"}
+	sub := &models.Subscription{Status: models.SubscriptionActive, CurrentPeriodEnd: time.Now().Add(time.Hour)}
+	plan := &models.Plan{Modules: []string{"realestate"}}
+	svc, id := build(tenant, sub, plan)
+
+	// Visitor-supplied form: mixed case, port, trailing dot.
+	ent, err := svc.ForHost(context.Background(), "Tower.Example.com:443.")
+	if err != nil {
+		t.Fatalf("ForHost: %v", err)
+	}
+	if ent.TenantID != id {
+		t.Errorf("tenant = %v, want %v", ent.TenantID, id)
+	}
+	if !ent.HasModule("realestate") {
+		t.Error("the entitlement should be the same document For returns")
+	}
+}
+
+func TestForHostUnknownIsNotFound(t *testing.T) {
+	svc, _ := build(activeTenant(), nil, nil)
+
+	_, err := svc.ForHost(context.Background(), "nobody.example.com")
+	var ae *apierr.APIError
+	if !errors.As(err, &ae) || ae.HTTPStatus != 404 {
+		t.Fatalf("want a 404 APIError, got %v", err)
+	}
+	if _, err := svc.ForHost(context.Background(), ""); err == nil {
+		t.Fatal("an empty host must not resolve")
+	}
+}

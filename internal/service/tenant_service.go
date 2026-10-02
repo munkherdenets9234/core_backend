@@ -171,3 +171,56 @@ func (s *TenantService) Resolve(ctx context.Context, rawKey string) (*models.Ten
 	}
 	return t, nil
 }
+
+// hostStore is the slice of the repository setHosts needs, narrow so the
+// ownership rules can be tested without MongoDB.
+type hostStore interface {
+	FindByHost(ctx context.Context, host string) (*models.Tenant, error)
+	UpdateHosts(ctx context.Context, id primitive.ObjectID, hosts []string) error
+}
+
+// UpdateHosts sets the public site hostnames that resolve to this tenant. An
+// empty list clears them. A host already owned by another tenant is a 409.
+func (s *TenantService) UpdateHosts(ctx context.Context, idStr string, hosts []string) error {
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		return apierr.BadRequest("invalid tenant id").In(apierr.DomainTenant)
+	}
+	return setHosts(ctx, s.repo, id, hosts)
+}
+
+func setHosts(ctx context.Context, st hostStore, id primitive.ObjectID, in []string) error {
+	seen := map[string]bool{}
+	hosts := make([]string, 0, len(in))
+	for _, h := range in {
+		h = models.NormalizeHost(h)
+		if h == "" || seen[h] {
+			continue
+		}
+		seen[h] = true
+		hosts = append(hosts, h)
+	}
+
+	// Friendly pre-check so the caller is told WHICH host is taken. It is
+	// racy by nature; the unique index below is what actually guarantees it.
+	for _, h := range hosts {
+		owner, err := st.FindByHost(ctx, h)
+		if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
+			return apierr.Internal(err)
+		}
+		if err == nil && owner.ID != id {
+			return apierr.Conflict("host " + h + " is already assigned to another tenant").In(apierr.DomainTenant)
+		}
+	}
+
+	if err := st.UpdateHosts(ctx, id, hosts); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return apierr.NotFound("tenant").In(apierr.DomainTenant)
+		}
+		if mongo.IsDuplicateKeyError(err) {
+			return apierr.Conflict("a host is already assigned to another tenant").In(apierr.DomainTenant)
+		}
+		return apierr.Internal(err)
+	}
+	return nil
+}

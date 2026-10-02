@@ -8,6 +8,7 @@
 package models
 
 import (
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -40,6 +41,13 @@ type Tenant struct {
 
 	// Domain, when set, binds the tenant's API key to one origin.
 	Domain string `bson:"domain,omitempty" json:"domain,omitempty"`
+
+	// Hosts are the public site hostnames a product maps to this tenant
+	// (a visitor arriving on tower.example.com is this tenant's visitor).
+	// Deliberately separate from Domain, which binds the API key to an origin:
+	// the two answer different questions and must be changeable independently.
+	// Always stored via NormalizeHost; unique across tenants (see the index).
+	Hosts []string `bson:"site_hosts,omitempty" json:"hosts"`
 
 	Status    TenantStatus `bson:"status" json:"status"`
 	CreatedAt time.Time    `bson:"created_at" json:"created_at"`
@@ -102,4 +110,18 @@ type ServiceClient struct {
 	// It is how you find out that a service you thought was retired is still
 	// calling, or that one you thought was live stopped a week ago.
 	LastSeenAt *time.Time `bson:"last_seen_at,omitempty" json:"last_seen_at,omitempty"`
+}
+
+// NormalizeHost reduces a hostname to the form hosts are stored and looked up
+// in: lowercase, no port, no trailing dot. A visitor's Host header arrives in
+// whatever shape their browser and proxy produced, and a stored value that
+// differs only in case or a ":443" would be a tenant that exists but is never
+// found.
+func NormalizeHost(h string) string {
+	h = strings.ToLower(strings.TrimSpace(h))
+	// Strip the port, but only when the colon is not inside an IPv6 literal.
+	if i := strings.LastIndex(h, ":"); i >= 0 && !strings.HasSuffix(h, "]") {
+		h = h[:i]
+	}
+	return strings.TrimSuffix(h, ".")
 }
