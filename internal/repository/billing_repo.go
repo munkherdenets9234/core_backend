@@ -179,3 +179,109 @@ func (r *SubscriptionRepo) UpdateStatus(ctx context.Context, tenantID primitive.
 	}
 	return nil
 }
+
+// ── Expiry notice ─────────────────────────────────────────────────────────
+
+// expiringFilter selects subscriptions that are paying and end inside
+// (after, through]. Pure so the rules can be tested without a database.
+func expiringFilter(after, through time.Time) bson.M {
+	return bson.M{
+		"status": bson.M{"$in": []models.SubscriptionStatus{
+			models.SubscriptionActive, models.SubscriptionTrialing,
+		}},
+		"current_period_end": bson.M{"$gt": after, "$lte": through},
+	}
+}
+
+// claimFilter matches a subscription only while it still ends at periodEnd and
+// has not already been marked for it. See ClaimExpiryNotice.
+func claimFilter(id primitive.ObjectID, periodEnd time.Time) bson.M {
+	return bson.M{
+		"_id":                id,
+		"current_period_end": periodEnd,
+		"expiry_notice_for":  bson.M{"$ne": periodEnd},
+	}
+}
+
+// releaseFilter matches only the marker this caller set.
+func releaseFilter(id primitive.ObjectID, periodEnd time.Time) bson.M {
+	return bson.M{"_id": id, "expiry_notice_for": periodEnd}
+}
+
+// FindExpiring returns paying subscriptions whose period ends after `after`
+// and no later than `through`.
+func (r *SubscriptionRepo) FindExpiring(ctx context.Context, after, through time.Time) ([]*models.Subscription, error) {
+	cur, err := r.col.Find(ctx, expiringFilter(after, through))
+	if err != nil {
+		return nil, err
+	}
+	var out []*models.Subscription
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ClaimExpiryNotice atomically records that a warning is being sent for
+// periodEnd, and reports whether THIS caller won the claim.
+//
+// Claiming before sending is what keeps a restart or a second replica from
+// double-sending: the conditional update succeeds for exactly one of them.
+// Requiring current_period_end to still equal periodEnd means a renewal that
+// lands between the find and the claim fails the claim rather than marking
+// the new period as already warned.
+func (r *SubscriptionRepo) ClaimExpiryNotice(ctx context.Context, id primitive.ObjectID, periodEnd time.Time) (bool, error) {
+	res, err := r.col.UpdateOne(ctx, claimFilter(id, periodEnd),
+		bson.M{"$set": bson.M{"expiry_notice_for": periodEnd}})
+	if err != nil {
+		return false, err
+	}
+	return res.ModifiedCount == 1, nil
+}
+
+// ReleaseExpiryNotice clears a claim after a failed send, so the next tick
+// retries. It only clears the marker for periodEnd, never a newer one.
+func (r *SubscriptionRepo) ReleaseExpiryNotice(ctx context.Context, id primitive.ObjectID, periodEnd time.Time) error {
+	_, err := r.col.UpdateOne(ctx, releaseFilter(id, periodEnd),
+		bson.M{"$unset": bson.M{"expiry_notice_for": ""}})
+	return err
+}
+
+// ExtendPeriod moves a subscription's period end and marks it active. Unlike
+// UpdatePlan it keeps the period start and the plan, which is the whole point
+// of renewing rather than changing plan.
+func (r *SubscriptionRepo) ExtendPeriod(ctx context.Context, tenantID primitive.ObjectID, newEnd time.Time, userID *primitive.ObjectID) error {
+	set := bson.M{
+		"current_period_end": newEnd,
+		"status":             models.SubscriptionActive,
+		"updated_at":         time.Now(),
+	}
+	if userID != nil {
+		set["user_id"] = userID
+	}
+	res, err := r.col.UpdateOne(ctx, bson.M{"tenant_id": tenantID}, bson.M{"$set": set})
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
+}
+
+// SetBillingDay records the day a subscription renews on. It does not move the
+// current period: see SubscriptionService.SetBillingDay.
+func (r *SubscriptionRepo) SetBillingDay(ctx context.Context, tenantID primitive.ObjectID, day int, userID *primitive.ObjectID) error {
+	set := bson.M{"billing_day": day, "updated_at": time.Now()}
+	if userID != nil {
+		set["user_id"] = userID
+	}
+	res, err := r.col.UpdateOne(ctx, bson.M{"tenant_id": tenantID}, bson.M{"$set": set})
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
+}

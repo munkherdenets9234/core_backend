@@ -51,6 +51,17 @@ func (r *TenantRepo) FindByID(ctx context.Context, id primitive.ObjectID) (*mode
 	return &t, nil
 }
 
+// FindBySlug resolves the identifier that appears in public URLs. Unique,
+// indexed — the slug is how the marketing site asks for one tenant's case
+// study without exposing an internal id.
+func (r *TenantRepo) FindBySlug(ctx context.Context, slug string) (*models.Tenant, error) {
+	var t models.Tenant
+	if err := r.col.FindOne(ctx, bson.M{"slug": slug}).Decode(&t); err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
 func (r *TenantRepo) List(ctx context.Context, page, limit int) ([]*models.Tenant, int64, error) {
 	filter := bson.M{}
 	total, err := r.col.CountDocuments(ctx, filter)

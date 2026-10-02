@@ -50,6 +50,18 @@ type Plan struct {
 	// Capabilities are on/off grants, keyed the same way. Absent is off.
 	Capabilities map[string]bool `bson:"capabilities,omitempty" json:"capabilities"`
 
+	// Marketing is the pricing card a visitor reads: bilingual copy that the
+	// public site renders and the console edits.
+	//
+	// It sits on the plan rather than in a separate collection because a
+	// price list has exactly one row per plan, and splitting it bought
+	// nothing but a join. It stays a NESTED document rather than loose
+	// fields so the two halves of this type cannot be confused: everything
+	// above is enforced by a server, everything in here is read by a human.
+	// Nothing in this struct is ever consulted when assembling an
+	// entitlement.
+	Marketing *PlanMarketing `bson:"marketing,omitempty" json:"marketing,omitempty"`
+
 	IsActive  bool      `bson:"is_active" json:"is_active"`
 	SortOrder int       `bson:"sort_order" json:"sort_order"`
 	CreatedAt time.Time `bson:"created_at" json:"created_at"`
@@ -71,6 +83,63 @@ func (p Plan) Period() int {
 		return DefaultPeriodDays
 	}
 	return p.PeriodDays
+}
+
+// LocaleText is one string per language, keyed by ISO code ("en", "mn").
+//
+// A map rather than a struct with named fields: adding a third language
+// should be a data change, not a schema migration in three repositories.
+type LocaleText map[string]string
+
+// LocaleList is the same idea for bullet lists.
+type LocaleList map[string][]string
+
+// PlanMarketing is the visitor-facing half of a plan.
+//
+// Every field here is optional. A plan created for internal use — a comped
+// account, a migration placeholder — has no pricing card and should not be
+// forced to invent one.
+type PlanMarketing struct {
+	Name        LocaleText `bson:"name,omitempty" json:"name,omitempty"`
+	Tagline     LocaleText `bson:"tagline,omitempty" json:"tagline,omitempty"`
+	BillingNote LocaleText `bson:"billing_note,omitempty" json:"billing_note,omitempty"`
+	Features    LocaleList `bson:"features,omitempty" json:"features,omitempty"`
+	// Highlighted draws the "most popular" ribbon on the public pricing page.
+	Highlighted bool `bson:"highlighted,omitempty" json:"highlighted,omitempty"`
+}
+
+// Text returns the copy for lang, falling back to English and then to any
+// language present. A pricing card with a blank name because one translation
+// was never filled in is worse than showing the other language.
+func (t LocaleText) Text(lang string) string {
+	if v, ok := t[lang]; ok && v != "" {
+		return v
+	}
+	if v, ok := t["en"]; ok && v != "" {
+		return v
+	}
+	for _, v := range t {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// List is LocaleList's counterpart to Text, with the same fallback order.
+func (l LocaleList) List(lang string) []string {
+	if v, ok := l[lang]; ok && len(v) > 0 {
+		return v
+	}
+	if v, ok := l["en"]; ok && len(v) > 0 {
+		return v
+	}
+	for _, v := range l {
+		if len(v) > 0 {
+			return v
+		}
+	}
+	return []string{}
 }
 
 type SubscriptionStatus string
@@ -108,8 +177,35 @@ type Subscription struct {
 
 	UserID *primitive.ObjectID `bson:"user_id,omitempty" json:"user_id,omitempty"`
 
+	// BillingDay is the day of the month this subscription renews on, 1 to 28.
+	// Zero means none is stored, which is every subscription that predates the
+	// field; read it through EffectiveBillingDay, never directly.
+	BillingDay int `bson:"billing_day,omitempty" json:"billing_day"`
+
+	// ExpiryNoticeFor is the current_period_end a warning has already been
+	// claimed for. It holds the DATE rather than a boolean on purpose: renewing
+	// or changing plan moves current_period_end, so the marker stops matching
+	// and the next period is warned about with no reset step anywhere.
+	//
+	// Internal bookkeeping, so it is not part of the wire contract.
+	ExpiryNoticeFor *time.Time `bson:"expiry_notice_for,omitempty" json:"-"`
+
 	// Plan is resolved on read by the service layer, not persisted. Left nil
 	// if the plan was deleted out from under the subscription — which does
 	// not invalidate the billing state and must not fail the read.
 	Plan *Plan `bson:"-" json:"plan,omitempty"`
+}
+
+// DefaultBillingDay is the day subscriptions renew on unless told otherwise.
+// The business bills on the 20th of the month.
+const DefaultBillingDay = 20
+
+// EffectiveBillingDay is the billing day to act on. A subscription with none
+// stored behaves as DefaultBillingDay, which is how every existing one keeps
+// working with no migration.
+func (s Subscription) EffectiveBillingDay() int {
+	if s.BillingDay == 0 {
+		return DefaultBillingDay
+	}
+	return s.BillingDay
 }

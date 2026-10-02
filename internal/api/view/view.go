@@ -38,6 +38,22 @@ type Tenant struct {
 	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
+
+	// Project is the publication state of this tenant's case study, and
+	// nothing else — not the case study itself, which the editor fetches on
+	// its own. Absent when the tenant has none.
+	//
+	// It is here because the console's tenant list shows a "showcase"
+	// column, and a column with no data source does not render as blank: it
+	// renders as "hidden", which is a claim, and a false one for every
+	// published tenant.
+	Project *TenantProject `json:"project,omitempty"`
+}
+
+// TenantProject is the list-sized view of a case study's publication state.
+type TenantProject struct {
+	Showcase bool `json:"showcase"`
+	Featured bool `json:"featured"`
 }
 
 func TenantOf(t *models.Tenant) Tenant {
@@ -60,6 +76,14 @@ func TenantsOf(ts []*models.Tenant) []Tenant {
 		out = append(out, TenantOf(t))
 	}
 	return out
+}
+
+// WithProject returns t carrying its publication state. A separate step from
+// TenantOf because most callers have no flags to attach and should not have
+// to pass nil to say so.
+func (t Tenant) WithProject(showcase, featured bool) Tenant {
+	t.Project = &TenantProject{Showcase: showcase, Featured: featured}
+	return t
 }
 
 // PlatformUser is the console's view of a staff account. No password hash
@@ -133,10 +157,14 @@ type Plan struct {
 	Modules      []string        `json:"modules"`
 	Limits       map[string]int  `json:"limits"`
 	Capabilities map[string]bool `json:"capabilities"`
-	IsActive     bool            `json:"is_active"`
-	SortOrder    int             `json:"sort_order"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	// Marketing is the pricing-card copy. Present here and absent from the
+	// svc surface: a product service is told what a tenant may run, never
+	// what the tier is called in Mongolian.
+	Marketing *models.PlanMarketing `json:"marketing,omitempty"`
+	IsActive  bool                  `json:"is_active"`
+	SortOrder int                   `json:"sort_order"`
+	CreatedAt time.Time             `json:"created_at"`
+	UpdatedAt time.Time             `json:"updated_at"`
 }
 
 func PlanOf(p *models.Plan) Plan {
@@ -155,6 +183,7 @@ func PlanOf(p *models.Plan) Plan {
 		caps = map[string]bool{}
 	}
 	return Plan{
+		Marketing:    p.Marketing,
 		ID:           p.ID.Hex(),
 		Slug:         p.Slug,
 		Name:         p.Name,
@@ -188,6 +217,10 @@ type Subscription struct {
 	CurrentPeriodStart time.Time  `json:"current_period_start"`
 	CurrentPeriodEnd   time.Time  `json:"current_period_end"`
 	CanceledAt         *time.Time `json:"canceled_at,omitempty"`
+	// BillingDay is the day of the month the subscription renews on. It is
+	// always present: the API reports what the system will act on, so a
+	// subscription with none stored reads as the default rather than as zero.
+	BillingDay int `json:"billing_day"`
 	// Plan is nil when the plan was deleted out from under the
 	// subscription — which is a real state, not an error. See
 	// SubscriptionService.Get.
@@ -203,6 +236,7 @@ func SubscriptionOf(s *models.Subscription) Subscription {
 		CurrentPeriodStart: s.CurrentPeriodStart,
 		CurrentPeriodEnd:   s.CurrentPeriodEnd,
 		CanceledAt:         s.CanceledAt,
+		BillingDay:         s.EffectiveBillingDay(),
 	}
 	if s.Plan != nil {
 		p := PlanOf(s.Plan)

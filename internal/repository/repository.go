@@ -61,12 +61,67 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 			Options: options.Index().SetUnique(true),
 		}},
 
+		// One document per page of the marketing site.
+		{"site_content", mongo.IndexModel{
+			Keys:    bson.D{{Key: "page", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		}},
+
+		// One case study per tenant. Unique because the console upserts by
+		// tenant_id: without it, a double-submit writes a second document
+		// and every later read picks whichever Mongo returns first.
+		{"tenant_details", mongo.IndexModel{
+			Keys:    bson.D{{Key: "tenant_id", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		}},
+		// The public case-study list filters on showcase and sorts on
+		// sort_order, on an unauthenticated route anyone can call.
+		{"tenant_details", mongo.IndexModel{
+			Keys: bson.D{{Key: "showcase", Value: 1}, {Key: "sort_order", Value: 1}},
+		}},
+
+		// A tenant shows a given pricing card once. Unique so assigning
+		// twice is the same state as assigning once, which is what lets
+		// TenantPlanRepo.Assign upsert instead of erroring.
+		{"tenant_plans", mongo.IndexModel{
+			Keys:    bson.D{{Key: "tenant_id", Value: 1}, {Key: "plan_id", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		}},
+
+		// Leads are listed newest-first, filtered by tenant on one screen.
+		// Not unique: the same person may enquire twice, and refusing the
+		// second enquiry would lose a real lead.
+		{"quotes", mongo.IndexModel{
+			Keys: bson.D{{Key: "created_at", Value: -1}},
+		}},
+		{"quotes", mongo.IndexModel{
+			Keys: bson.D{{Key: "tenant_id", Value: 1}, {Key: "created_at", Value: -1}},
+		}},
+
 		// One subscription per tenant. This is the constraint that encodes
 		// the billing model: a tenant buys one plan covering several
 		// modules, never several overlapping subscriptions.
 		{"subscriptions", mongo.IndexModel{
 			Keys:    bson.D{{Key: "tenant_id", Value: 1}},
 			Options: options.Index().SetUnique(true),
+		}},
+
+		// Reset lookups are by email, newest first.
+		{"password_resets", mongo.IndexModel{
+			Keys: bson.D{{Key: "email", Value: 1}, {Key: "created_at", Value: -1}},
+		}},
+
+		// A TTL index, so spent codes delete themselves an hour past expiry.
+		//
+		// Not housekeeping: a reset code is a credential, and a collection of
+		// old ones is a collection of hashed credentials sitting in every
+		// backup for no reason. The hour of slack is deliberate — the code
+		// stops working at expires_at, and the row lingering slightly longer
+		// means a replay is answered "expired" rather than "no such code",
+		// which is the more useful thing to tell someone typing a stale code.
+		{"password_resets", mongo.IndexModel{
+			Keys:    bson.D{{Key: "expires_at", Value: 1}},
+			Options: options.Index().SetExpireAfterSeconds(3600),
 		}},
 	}
 

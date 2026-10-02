@@ -1,6 +1,8 @@
 // Package public is the console surface reachable with no credentials.
 //
-// It contains exactly one thing — login — and that is the intended size. Its
+// It contains login and the emailed-code password reset, and that is the
+// intended size. Reset is here because it has to be: someone who has
+// forgotten their password cannot present one. Its
 // counterpart, admin/private, is mounted behind a superadmin check by
 // admin.Register, so a controller there cannot be reached without a token
 // whatever a later router edit does.
@@ -20,7 +22,8 @@ import (
 )
 
 type Deps struct {
-	PlatformUser *service.PlatformUserService
+	PlatformUser  *service.PlatformUserService
+	PasswordReset *service.PasswordResetService
 
 	// AuthRateLimit guards login. It answers differently for a known and an
 	// unknown email in timing if not in text, and it is the front door to
@@ -30,9 +33,18 @@ type Deps struct {
 
 func Register(base *gin.RouterGroup, d Deps) {
 	c := &authController{svc: d.PlatformUser}
+	reset := &passwordResetController{svc: d.PasswordReset}
 
 	g := httpx.Wrap(base)
-	g.Group("", d.AuthRateLimit).POST("/login", c.Login)
+
+	// All three share the auth limiter. Reset is if anything the more
+	// attractive target: it mails on demand, which costs the sending
+	// account's daily quota, and its confirm step is a guess against a
+	// six-digit code.
+	limited := g.Group("", d.AuthRateLimit)
+	limited.POST("/login", c.Login)
+	limited.POST("/password-reset/request", reset.Request)
+	limited.POST("/password-reset/confirm", reset.Confirm)
 }
 
 type authController struct {

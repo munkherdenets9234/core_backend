@@ -1,0 +1,4197 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "tenantcore API",
+    "version": "1.0.0",
+    "summary": "The platform's tenant moderator: who a tenant is, who the platform's own staff are, what each tenant has bought, and what it is allowed to run.",
+    "description": "Every response is the same envelope: `{ \"success\": true, \"data\": ... }` on success, `{ \"success\": false, \"error\": { \"domain\", \"code\", \"message\" } }` on failure. **Branch on `error.code`, never on `error.message`** — the code is a stable contract, the message is prose and may be reworded.\n\nThree audiences share this surface, and the split IS the authorization, not a convention layered on top of it: `POST /api/v1/admin/login` needs no credential, everything else under `/api/v1/admin/**` needs a superadmin bearer token, and every `/api/v1/svc/**` route needs a per-service `X-Service-Key` instead. A console token never opens `/svc`, and a service key never opens the console — both directions are asserted by `internal/api/guard_test.go`, which walks the live route table rather than a hand-kept list, so a route added tomorrow is covered without anyone remembering to add it.\n\nThe console token is an Ed25519-signed JWT (`alg: EdDSA`), not the shared-HMAC pattern the product services use among themselves today. With a shared secret, anything able to verify a token is also able to mint one — a compromised product deployment could forge a platform-superadmin token. Ed25519 splits the two: tenantcore holds the private key and is the only issuer; every product service holds only the public key (`GET /.well-known/tenantcore`) and can verify but never forge. The cost of that split is that verification is **offline** — nobody calls back into tenantcore to check that a token's holder is still active — so suspending a platform user does not take effect until their current token expires. `TOKEN_TTL` is that window, bounded to at most 24 hours. There is exactly one role at the console level: every platform user is a superadmin.\n\nThe one payload every product service actually depends on is the entitlement document returned by `GET /api/v1/svc/entitlements` (or `/entitlements/{tenant_id}`, the id-keyed form used internally). Three rules govern its shape and how a consumer must treat it:\n\n1. **A lookup failure is \"could not find out\", never \"no\".** If an unreachable tenantcore meant \"not entitled\", this service would be a single point of failure for every product at once — worse than the monolith it replaces. A transport or 5xx failure is reported as an error and a well-behaved consumer serves its own last-known answer with `stale` set, rather than refusing the tenant.\n2. **`modules` and `limits`/`features` are different axes.** `modules` says WHICH products a tenant may reach; `limits` and `features` say what business tier they hold WITHIN a product they already have. tenantcore stores the numbers and does not interpret them — it does not know that `locations` counts car wash branches — so a new product feature never requires a change here.\n3. **Fields are only ever added, never renamed.** tenantcore and every consumer are separate copies of one wire contract, not a shared import, so an older side reading a renamed field silently sees a zero value — which for `modules` means *unenforced* and for `status` means *unknown*.\n\nSee the `Entitlement` schema for the exact shape. `stale` is set by a **consumer's own cache**, never by this API — there is nothing to be stale about one query away from the database.",
+    "contact": {
+      "name": "tenantcore",
+      "url": "https://example.invalid/tenantcore"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8090",
+      "description": "Local development (config.Load's default APP_PORT; the currently-deployed instance runs on 8092 — see HANDOVER.md)"
+    },
+    {
+      "url": "{scheme}://{host}",
+      "description": "Any deployment",
+      "variables": {
+        "scheme": {
+          "default": "https",
+          "enum": [
+            "https",
+            "http"
+          ]
+        },
+        "host": {
+          "default": "tenantcore.example.invalid"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "name": "Operational",
+      "description": "Unversioned. Describes the deployment rather than serving its data. No credential."
+    },
+    {
+      "name": "Public",
+      "description": "No credentials. The console's front door."
+    },
+    {
+      "name": "Marketing",
+      "description": "No credentials. The platform operator's OWN public site - its pricing page, its case studies about tenants it has onboarded, and its contact form. Not a tenant's storefront: nothing here is scoped to a tenant, and no tenant can write to it. Every read returns only what has been explicitly published (an active plan, a showcased case study), and no response here carries a contact email, an API key fragment, a tenant status, or any entitlement field."
+    },
+    {
+      "name": "Content",
+      "description": "Superadmin console. The operator's own content about its tenants: case studies, the leads the contact form produces, and which pricing cards each tenant displays. None of it affects what a tenant is entitled to run - that is Plans and the subscription."
+    },
+    {
+      "name": "Tenants",
+      "description": "Superadmin console. Tenant identity, status, domain binding, API key, and the subscription that hangs off each tenant."
+    },
+    {
+      "name": "Plans",
+      "description": "Superadmin console. The price list, and what subscribing to each tier grants."
+    },
+    {
+      "name": "Platform Users",
+      "description": "Superadmin console. The platform operator's own staff — every one of them a superadmin."
+    },
+    {
+      "name": "Service Clients",
+      "description": "Superadmin console. The product services permitted to call the machine-to-machine surface."
+    },
+    {
+      "name": "Service",
+      "description": "Machine-to-machine. What a product service asks tenantcore about one tenant. Requires X-Service-Key, never a bearer token."
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": [
+          "Operational"
+        ],
+        "operationId": "health",
+        "security": [],
+        "summary": "Is the process up",
+        "description": "Deliberately dependency-free. A health check that talks to the database turns a slow query into a restart loop.",
+        "responses": {
+          "200": {
+            "description": "Up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "Operational"
+        ],
+        "operationId": "readiness",
+        "security": [],
+        "summary": "What this deployment can actually do",
+        "description": "Always 200, even when degraded: a deployment missing an optional feature (no superadmin bootstrap configured, the public-key endpoint switched off, rate limiting disabled) is degraded, not unhealthy, and a failure status here would make an orchestrator restart a process that is working exactly as configured. Alert on `degraded`, not on the status code.",
+        "responses": {
+          "200": {
+            "description": "Readiness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/.well-known/tenantcore": {
+      "get": {
+        "tags": [
+          "Operational"
+        ],
+        "operationId": "wellKnown",
+        "security": [],
+        "summary": "The Ed25519 verifying key",
+        "description": "Unauthenticated by design: the key is public by construction, it is useless for forging anything, and requiring a credential to fetch a credential-verifier would mean every product needs a credential before it can check one. `kid` is served alongside the key so a product can hold two keys during a rotation and pick by the token header's `kid` rather than guessing.\n\nOnly served when `PUBLISH_PUBLIC_KEY=true` (the default); otherwise this route does not exist and the deployment reports it on `/readyz` as a disabled feature.",
+        "responses": {
+          "200": {
+            "description": "The verifying key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WellKnown"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/login": {
+      "post": {
+        "tags": [
+          "Public"
+        ],
+        "operationId": "adminLogin",
+        "security": [],
+        "summary": "Sign in a platform staff member",
+        "description": "An unknown email and a wrong password return the identical 401 message on purpose — telling them apart is an account-existence oracle. A suspended account DOES say so distinctly (403), because the caller has already proved they hold the password and suspension is a state they can be told about.\n\nRate limited by `AUTH_RATE_PER_MINUTE`; a 429 carries `Retry-After` in seconds. This is the front door to the service that administers every tenant on the platform.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/LoginData"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "The account exists and the password is correct, but it is suspended",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants": {
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "createTenant",
+        "summary": "Provision a tenant",
+        "description": "Returns the tenant's API key. **This is the only time it is ever shown** — only its hash is stored, so a lost key is rotated (`POST /tenants/{id}/rotate-key`), never recovered.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTenantRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/CreateTenantData"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "description": "A tenant with this slug already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "listTenants",
+        "summary": "List tenants",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of tenants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Tenant"
+                          }
+                        },
+                        "meta": {
+                          "$ref": "#/components/schemas/Meta"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}": {
+      "get": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "getTenant",
+        "summary": "Fetch a tenant",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Tenant"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/status": {
+      "put": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "updateTenantStatus",
+        "summary": "Activate or suspend a tenant",
+        "description": "Suspension outranks billing state everywhere downstream: `GET /svc/entitlements` reports a suspended tenant's status as `canceled` regardless of what its subscription says, so every product sees the same answer rather than each combining \"suspended\" with \"paid up\" its own way.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Updated"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/domain": {
+      "put": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "updateTenantDomain",
+        "summary": "Bind a tenant's API key to one origin",
+        "description": "tenantcore only records the domain; the product service that receives the key is the one that sees the browser's Origin/Referer and must enforce it. Two tenants cannot share one domain — a key leaked from either would then pass the origin check on both — so binding a domain already assigned elsewhere is a 409.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDomainRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Updated"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "That domain is already assigned to another tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/rotate-key": {
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "rotateTenantAPIKey",
+        "summary": "Issue a new API key and invalidate the old one immediately",
+        "description": "The new key is shown here and never again, exactly like creation. There is no grace period — the old key stops working the moment this returns, so coordinate the swap with whoever holds the tenant's storefront configuration before calling it.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The new key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "api_key": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/subscription": {
+      "get": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "getTenantSubscription",
+        "summary": "Fetch a tenant's subscription",
+        "description": "`plan` is absent when the plan was deleted out from under a live subscription — a real state, not an error. The subscription itself keeps standing; there is simply nothing left to read the modules and limits from.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Subscription"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "This tenant has no subscription yet — not an error state for the tenant itself, but there is nothing to return here",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "createTenantSubscription",
+        "summary": "Subscribe a tenant to a plan",
+        "description": "One subscription per tenant, enforced by a unique index — a tenant who wants two products holds ONE subscription whose plan lists both modules, not two subscriptions. The billing period starts now and runs for the plan's `period_days`. The plan must be active; subscribing to a retired plan is a 422. The first period ends at 00:00 UTC on the subscription's **billing day** (1 to 28, default 20): the first billing-day date at least half a month (15 days, or half the period for a plan shorter than a month) after the starting point, with whole months added for plans longer than one. The first period after moving onto a billing day can therefore be shorter than a month; every one after lands on the day.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanIDBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Subscription"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body, or `plan_id` does not name a plan that exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "description": "This tenant already has a subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The named plan exists but is not active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/subscription/plan": {
+      "put": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "changeTenantPlan",
+        "summary": "Move a tenant onto a different plan",
+        "description": "Restarts the current billing period from now, for `period_days` of the NEW plan — a mid-period upgrade does not prorate. That is a known gap (see `Not done yet` in the README) and the first thing to fix once a payment provider exists. The new period ends at 00:00 UTC on the subscription's **billing day** (1 to 28, default 20): the first billing-day date at least half a month (15 days, or half the period for a plan shorter than a month) after the starting point, with whole months added for plans longer than one. The first period after moving onto a billing day can therefore be shorter than a month; every one after lands on the day. The subscription's existing billing day is kept, so changing plan never quietly moves a tenant off the day they bill on.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanIDBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Updated"
+          },
+          "400": {
+            "description": "Malformed body, or `plan_id` does not name a plan that exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "This tenant has no subscription to change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The named plan exists but is not active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/subscription/cancel": {
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "cancelTenantSubscription",
+        "summary": "Cancel a tenant's subscription",
+        "description": "Marks the subscription canceled but leaves its plan and period untouched, so `current_period_end` still means something and the record shows what the tenant had rather than only that they stopped.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Canceled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "canceled": {
+                              "type": "boolean",
+                              "const": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "This tenant has no subscription to cancel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/subscription/renew": {
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "renewTenantSubscription",
+        "summary": "Extend a tenant's subscription by one plan period",
+        "description": "Extends the subscription to its next billing-day date, keeping the plan and the period start, and sets the status to `active`. No request body, and a custom length is deliberately not offered.\n\n**The starting point is `max(now, current_period_end)`.** A live subscription keeps the days the tenant already paid for. A lapsed one renews from today, so renewing a long-dead subscription cannot land in the past and leave the tenant still expired. The new end falls at 00:00 UTC on the subscription's **billing day** (1 to 28, default 20): the first billing-day date at least half a month (15 days, or half the period for a plan shorter than a month) after the starting point, with whole months added for plans longer than one. The first period after moving onto a billing day can therefore be shorter than a month; every one after lands on the day.\n\nThis is not the same as `PUT /subscription/plan`, which restarts the period from today and so DISCARDS the days remaining. Use Renew to extend, Change plan to move between plans.\n\n**A cancelled subscription returns `409`.** Cancelling is a deliberate act, and renewing it quietly would erase the fact that the tenant was cancelled on purpose. Change plan reactivates it explicitly. `past_due` and `trialing` subscriptions can be renewed. `404` when the tenant has no subscription.\n\nRenewing also re-arms the seven-day expiry warning for the new period, with no reset step: the warning is keyed to the period end date, which has just moved.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The renewed subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Subscription"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such tenant, or the tenant has no subscription"
+          },
+          "409": {
+            "description": "The subscription is canceled; use Change plan to reactivate it"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/subscription/billing-day": {
+      "put": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "setSubscriptionBillingDay",
+        "summary": "Change the day of the month a subscription renews on",
+        "description": "Sets `billing_day` (1 to 28). **It changes future periods only and never moves `current_period_end`.** Moving the current end earlier would silently take days the tenant already paid for, so the new day applies from the next Renew, Change plan or Subscribe; Renew is how the current end moves.\n\n1 to 28 only: the 29th to 31st do not exist in every month, so a subscription anchored to one would drift in February. `400` outside that range, `404` when the tenant has no subscription.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "billing_day"
+                ],
+                "properties": {
+                  "billing_day": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 28,
+                    "example": 20
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The billing day that was set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "billing_day": {
+                              "type": "integer",
+                              "example": 20
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "billing_day is outside 1 to 28"
+          },
+          "404": {
+            "description": "No such tenant, or the tenant has no subscription"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/entitlement": {
+      "get": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "getTenantEntitlementAsAdmin",
+        "summary": "See exactly what a product service would receive for this tenant",
+        "description": "Same assembly as `GET /svc/entitlements`, not a reimplementation — the two must never disagree. This is what turns \"the customer says the module is missing\" into a ten-second check, without impersonating the product service that is complaining.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The entitlement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Entitlement"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/plans": {
+      "post": {
+        "tags": [
+          "Plans"
+        ],
+        "operationId": "createPlan",
+        "summary": "Add a plan to the price list",
+        "description": "`modules`, `limits` and `capabilities` are opaque to tenantcore — it stores the keys, it does not interpret them. Module names must be non-blank and non-duplicate; limits must not be negative (zero is a real ceiling of none, distinct from an absent key which means unlimited).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePlanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Plan"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "description": "A plan with this slug already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Plans"
+        ],
+        "operationId": "listPlans",
+        "summary": "List plans",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of plans",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Plan"
+                          }
+                        },
+                        "meta": {
+                          "$ref": "#/components/schemas/Meta"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/plans/{id}": {
+      "get": {
+        "tags": [
+          "Plans"
+        ],
+        "operationId": "getPlan",
+        "summary": "Fetch a plan",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Plan"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Plans"
+        ],
+        "operationId": "updatePlan",
+        "summary": "Change one or more fields of a plan",
+        "description": "Takes a **partial** document — send only what changes, so the console does not have to resend the whole plan and race another editor over the rest. `modules`, when present, is validated the same way as on create: a typo here is not cosmetic, it silently removes a product from everyone already on the plan.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Any subset of the Plan schema's writable fields (slug, name, price, currency, period_days, modules, limits, capabilities, is_active, sort_order)."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Updated"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "description": "`modules` was present and malformed — not a list of strings, blank, or duplicated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Plans"
+        ],
+        "operationId": "deletePlan",
+        "summary": "Remove a plan from the price list",
+        "description": "Subscriptions already on this plan keep working — deleting a plan does not touch them, it only removes it from the list a new subscription can be created against. There is no route yet to count how many tenants are on a plan before deleting it (`PlanRepo.CountSubscribers` exists for this and is unused — see the README's `Not done yet`), so the console warns in words rather than in numbers.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "deleted": {
+                              "type": "boolean",
+                              "const": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/admins": {
+      "post": {
+        "tags": [
+          "Platform Users"
+        ],
+        "operationId": "createPlatformUser",
+        "summary": "Add another superadmin",
+        "description": "A blank `password` generates one and echoes it in the response, **once** — it is stored only as a bcrypt hash and cannot be read back afterwards. Send a password explicitly to skip generation; it must be at least 8 characters.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePlatformUserRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/CreatePlatformUserData"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "description": "A platform user with this email already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Platform Users"
+        ],
+        "operationId": "listPlatformUsers",
+        "summary": "List platform staff",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of platform users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/PlatformUser"
+                          }
+                        },
+                        "meta": {
+                          "$ref": "#/components/schemas/Meta"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/admins/{id}/status": {
+      "put": {
+        "tags": [
+          "Platform Users"
+        ],
+        "operationId": "updatePlatformUserStatus",
+        "summary": "Activate or suspend a platform staff account",
+        "description": "Refuses to suspend the LAST active superadmin — tenantcore administers every tenant on the platform, and locking every administrator out of it is not a mistake the API undoes, so it never happens through this route no matter how the console is edited.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Updated"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "This is the last active platform user; suspending it would lock every superadmin out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/admins/{id}/password": {
+      "put": {
+        "tags": [
+          "Platform Users"
+        ],
+        "operationId": "resetPlatformUserPassword",
+        "summary": "Set another platform user's password",
+        "description": "A superadmin resetting someone else's password, as opposed to `PUT /account/password` which is changing your own. A blank `new_password` generates one and returns it once, exactly like account creation. Rate limited by `AUTH_RATE_PER_MINUTE` — this route takes no proof of the target's current password, so it is guessable in the way login is.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ResetPasswordData"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/account/password": {
+      "put": {
+        "tags": [
+          "Platform Users"
+        ],
+        "operationId": "changeOwnPassword",
+        "summary": "Change the caller's own password",
+        "description": "Requires the current password, unlike the reset-another-user route. Rate limited by `AUTH_RATE_PER_MINUTE`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Updated"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "description": "Missing/invalid token, OR the token was valid but `current_password` was wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/service-clients": {
+      "post": {
+        "tags": [
+          "Service Clients"
+        ],
+        "operationId": "createServiceClient",
+        "summary": "Register a product service",
+        "description": "Returns the raw service key. **This is the only time it is ever shown** — only its hash is stored. Put it in that product's `TENANTCORE_SERVICE_KEY` immediately; there is no way to retrieve it later, only to revoke it and create a new one.\n\nProduct services are managed here rather than by static configuration for one reason: revoking a leaked key must not require a deploy. A key in an environment variable is revoked by redeploying every instance and hoping none were missed; a key in this collection is revoked by one request.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateServiceClientRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/CreateServiceClientData"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "description": "A service client with this name already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Service Clients"
+        ],
+        "operationId": "listServiceClients",
+        "summary": "List registered product services",
+        "description": "Not paginated — this list is the operator's own product services (\"digitalservice\", \"carwash\", ...), which stays small by construction, unlike tenants.",
+        "responses": {
+          "200": {
+            "description": "The registered service clients",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ServiceClient"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/service-clients/{id}/revoke": {
+      "post": {
+        "tags": [
+          "Service Clients"
+        ],
+        "operationId": "revokeServiceClient",
+        "summary": "Disable a service key immediately",
+        "description": "A status change, not a delete, so the record of which service held which key survives the revocation — exactly what an incident review needs. Every future request with the revoked key gets `401 UNAUTHORIZED` in the `SERVICE` domain.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "revoked": {
+                              "type": "boolean",
+                              "const": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/svc/entitlements/{tenant_id}": {
+      "get": {
+        "tags": [
+          "Service"
+        ],
+        "operationId": "getEntitlementByTenantID",
+        "security": [
+          {
+            "serviceKey": []
+          }
+        ],
+        "summary": "Look up an entitlement by tenant id",
+        "description": "For a product service that has already resolved a tenant of its own — the common case during the transitional period where products still keep their own tenants collection. Once a product no longer keeps tenants locally, `GET /svc/entitlements` (by API key) is what it actually calls.",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{24}$"
+            },
+            "description": "24-character hex MongoDB ObjectId."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The entitlement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Entitlement"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`tenant_id` is not a valid ObjectId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unrecognised `X-Service-Key`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The service key is recognised but revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No tenant with this id exists — distinct from a tenant that exists but has no subscription, which is 200 with an unenforced entitlement, not a 404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/svc/entitlements": {
+      "get": {
+        "tags": [
+          "Service"
+        ],
+        "operationId": "getEntitlementByAPIKey",
+        "security": [
+          {
+            "serviceKey": [],
+            "tenantApiKey": []
+          }
+        ],
+        "summary": "Look up an entitlement by the tenant's own API key",
+        "description": "What a product service calls once it no longer keeps a tenants collection of its own: the platform resolves WHICH tenant the key belongs to and WHAT they are entitled to in one round trip, so the product never needs its own copy of the tenants collection to drift out of step with this one.\n\nThe tenant's key travels in `X-Tenant-Key`, a header, deliberately not a query parameter or the path — a credential in a URL ends up in access logs, proxy logs and browser history, none of which are places to keep one. It is a **different** credential from `X-Service-Key`: the service key proves which product is asking, the tenant key says which tenant it is asking about, and neither substitutes for the other.\n\nAn unknown tenant key is `401` — a real failed authentication, not a lookup failure. A key belonging to a **suspended** tenant is NOT an error: it resolves normally and `status` in the response body reports the suspension, so a caller gets the same uniform document either way instead of having to special-case this endpoint.",
+        "responses": {
+          "200": {
+            "description": "The entitlement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Entitlement"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing `X-Tenant-Key` header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/unrecognised `X-Service-Key`, OR an `X-Tenant-Key` that matches no tenant. `error.domain` tells the two apart: `SERVICE` means the caller's own key is wrong, `TENANT` means the tenant key it was asking about is wrong.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The service key is recognised but revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/plans": {
+      "get": {
+        "tags": [
+          "Marketing"
+        ],
+        "operationId": "publicListPlans",
+        "security": [],
+        "summary": "The public price list",
+        "description": "Active plans only, in display order. The filter is applied server-side rather than left to the caller: an inactive plan is one the operator has withdrawn, and a client that forgot to filter would put it back on sale.\n\nA plan with no marketing copy still renders - `name` falls back to `{\"en\": <slug>}`, because an unnamed card on a public pricing page is worse than a technical-looking one.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PublicLimit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The published price list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/PublicPlan"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/projects": {
+      "get": {
+        "tags": [
+          "Marketing"
+        ],
+        "operationId": "publicListProjects",
+        "security": [],
+        "summary": "Showcased case studies",
+        "description": "Case studies the operator has published, sorted by `sort_order`. Copy is resolved to one language - ask twice with different `lang` values if you need both.\n\nA case study whose tenant has since been deleted is skipped rather than returned half-empty, and rather than failing the whole page over one stale row.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Lang"
+          },
+          {
+            "$ref": "#/components/parameters/PublicLimit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Published case studies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/PublicProject"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/public/projects/{slug}": {
+      "get": {
+        "tags": [
+          "Marketing"
+        ],
+        "operationId": "publicGetProject",
+        "security": [],
+        "summary": "One case study by tenant slug",
+        "description": "`slug` identifies the TENANT, not the case study - so the public URL survives the copy being rewritten.\n\nA tenant that exists but is not showcased returns 404, identical to a slug that matches nothing. Distinguishing them would turn this into an oracle for which companies are customers.",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The tenant's slug."
+          },
+          {
+            "$ref": "#/components/parameters/Lang"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The case study",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/PublicProject"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/public/quotes": {
+      "post": {
+        "tags": [
+          "Marketing"
+        ],
+        "operationId": "publicCreateQuote",
+        "security": [],
+        "summary": "Submit an enquiry",
+        "description": "The only write on this service reachable with no credential, and the only one an anonymous stranger can perform. Rate limited by `AUTH_RATE_PER_MINUTE`; a 429 carries `Retry-After` in seconds.\n\nThe response deliberately does not echo the created quote. The submitter has no business holding an id they could probe with, and the form only needs to know it worked.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateQuoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Received",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "received": {
+                              "type": "boolean",
+                              "example": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/project": {
+      "get": {
+        "tags": [
+          "Content"
+        ],
+        "operationId": "getTenantProject",
+        "summary": "A tenant's case study",
+        "description": "Returns `data: null` when the tenant has no case study yet. That is not a 404: the console opens an empty form on it, and an error would make \"never written\" look like \"something went wrong\".",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Tenant id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The case study, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TenantDetail"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Content"
+        ],
+        "operationId": "updateTenantProject",
+        "summary": "Write a tenant's case study",
+        "description": "Creates the case study on first save and replaces it thereafter - the console has no separate \"create\" step, because an operator just opens the form and saves.\n\nA full replace: every field on the form is sent every time, so omitting one clears it.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Tenant id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Updated"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/quotes": {
+      "get": {
+        "tags": [
+          "Content"
+        ],
+        "operationId": "listQuotes",
+        "summary": "Every lead across the platform",
+        "description": "Newest first, tenant-linked and tenant-less alike. Most have no tenant at all - a prospect enquiring before signing up is the normal case, not an edge one.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of leads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Quote"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/quotes/{id}/status": {
+      "put": {
+        "tags": [
+          "Content"
+        ],
+        "operationId": "updateQuoteStatus",
+        "summary": "Move a lead through the pipeline",
+        "description": "The only mutable field on a quote. The enquiry itself is what the visitor wrote and is never edited here.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Quote id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateQuoteStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Updated"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/quotes": {
+      "get": {
+        "tags": [
+          "Content"
+        ],
+        "operationId": "listTenantQuotes",
+        "summary": "Leads that came through one tenant",
+        "description": "The subset of quotes carrying this tenant id - enquiries that arrived through that tenant's own storefront rather than the operator's site.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Tenant id."
+          },
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of leads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Quote"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/packages": {
+      "get": {
+        "tags": [
+          "Content"
+        ],
+        "operationId": "listTenantPackages",
+        "summary": "Which pricing cards a tenant displays",
+        "description": "NOT what the tenant is entitled to run - that is the subscription. This is display only, and a tenant may show a card it is not itself on.\n\nA plan deleted after assignment is omitted rather than failing the read, the same rule the entitlement assembly follows.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Tenant id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plans this tenant displays",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Plan"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Content"
+        ],
+        "operationId": "assignTenantPackage",
+        "summary": "Show a pricing card on a tenant's storefront",
+        "description": "Idempotent: assigning twice is the same state as assigning once, so a double-submitting console gets 201 rather than a conflict it would have to explain.\n\nGrants the tenant nothing.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Tenant id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignPackageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Assigned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "assigned": {
+                              "type": "boolean",
+                              "example": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/packages/{package_id}": {
+      "delete": {
+        "tags": [
+          "Content"
+        ],
+        "operationId": "unassignTenantPackage",
+        "summary": "Stop showing a pricing card",
+        "description": "Removes the assignment only. The plan itself and any subscription to it are untouched.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Tenant id."
+          },
+          {
+            "name": "package_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Plan id, named `package_id` to match the console's vocabulary."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unassigned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "unassigned": {
+                              "type": "boolean",
+                              "example": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/public/content": {
+      "get": {
+        "tags": [
+          "Marketing"
+        ],
+        "operationId": "publicGetContent",
+        "security": [],
+        "summary": "Edited copy for the marketing site",
+        "description": "Every page at once, resolved to one language. One call rather than one per page: the nav and footer live in `common` and are on every screen, so a per-page endpoint would mean two requests to render anything.\n\nWhat comes back are OVERRIDES. The site keeps its compiled-in dictionaries and merges these on top, so an unreachable tenantcore degrades to the copy that shipped with the build rather than to an empty page.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Lang"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Overrides by page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/SiteContent"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/content": {
+      "get": {
+        "tags": [
+          "Content"
+        ],
+        "operationId": "listContentPages",
+        "summary": "Which pages can be edited",
+        "description": "A fixed list, matching the site's compiled-in dictionaries. The console builds its menu from this rather than hardcoding one that would drift. An override for a page the site does not have is copy nobody will ever see, written by someone who believed they had changed something.",
+        "responses": {
+          "200": {
+            "description": "Editable page names",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "pages": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/content/{page}": {
+      "get": {
+        "tags": [
+          "Content"
+        ],
+        "operationId": "getContentPage",
+        "summary": "One page's overrides",
+        "description": "A page nobody has edited returns an empty `entries` list, not a 404 - the editor opens on it.",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Dictionary name, e.g. `home` or `common`."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The page's overrides",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/SitePage"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Content"
+        ],
+        "operationId": "saveContentPage",
+        "summary": "Replace a page's overrides",
+        "description": "Entries whose every language is blank are dropped rather than stored - see SavePageRequest.",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Dictionary name, e.g. `home` or `common`."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavePageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Updated"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      }
+    },
+    "/api/v1/svc/notifications/email": {
+      "post": {
+        "tags": [
+          "Service"
+        ],
+        "operationId": "sendNotificationEmail",
+        "security": [
+          {
+            "serviceKey": []
+          }
+        ],
+        "summary": "Send a templated email on behalf of a product service",
+        "description": "tenantcore is the only service that holds mail credentials. Products do not send their own mail — they ask here, the same way they ask about entitlements, so one Gmail app password lives in one place and is rotated in one place instead of being copied into every product's .env.\n\n**The division of labour is the opposite of `/svc/entitlements`, and worth getting straight.** For entitlements, tenantcore is the authority and the product is asking. Here tenantcore is a utility: the PRODUCT owns the flow. For a password reset, digitalservice holds the tenant users, mints the token, builds the link and decides who is allowed one; this endpoint only puts the resulting message in an inbox. tenantcore never sees the token and cannot validate it.\n\n**The caller names a `template`; it cannot supply a subject, a body, or a From.** Those come from the template and from this service's configuration. A service key is a machine credential sitting in another service's environment, so if one leaks the damage should be \"someone triggered a password-reset mail\" rather than \"someone sent arbitrary mail from our address to anyone they liked\". Adding a message means adding a template here, in review.\n\nRate limited on top of the service-key check — a leaked key should not be able to empty the sending account's daily quota before anyone notices.\n\n`200` means the relay ACCEPTED the message, not that it was delivered; SMTP cannot promise the latter. `503 FEATURE_UNAVAILABLE` means this deployment has no mail credentials configured, which is reported at startup and on `/readyz` — password resets do not work at all in that state, and failing loudly beats a reset mail that silently never arrives.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "to",
+                  "template"
+                ],
+                "properties": {
+                  "to": {
+                    "type": "string",
+                    "format": "email",
+                    "description": "Recipient address.",
+                    "example": "admin@example.mn"
+                  },
+                  "template": {
+                    "type": "string",
+                    "enum": [
+                      "password_changed",
+                      "password_reset",
+                      "password_reset_code",
+                      "subscription_expiring"
+                    ],
+                    "description": "Which message to send. A closed set — an unknown name is a 400 naming the valid options. `password_reset` carries a one-time link; `password_changed` is the after-the-fact notice, which exists because a password change the owner did not make is the one thing they must hear about immediately. `password_reset_code` is the same flow as `password_reset` but carries a six-digit code instead of a link. `subscription_expiring` is the operator notice that a tenant's subscription is about to lapse; tenantcore sends it itself on a timer."
+                  },
+                  "data": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Values substituted into the template. `password_reset` requires `app`, `name`, `reset_url` and `expires_in`; `password_changed` requires `app` and `name`. A missing key is a 400 naming it, never a mail that goes out with a blank where the link should be. `password_reset_code` requires `app`, `name`, `code` and `expires_in`; `subscription_expiring` requires `app`, `tenant`, `plan`, `ends_on` and `days_left`.",
+                    "example": {
+                      "app": "Travel Mongolia Admin",
+                      "name": "Munkh-Erdene",
+                      "reset_url": "https://admin.example.mn/reset?token=…",
+                      "expires_in": "1 hour"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted by the relay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "accepted": {
+                              "type": "boolean",
+                              "example": true
+                            },
+                            "template": {
+                              "type": "string",
+                              "example": "password_reset"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown template, missing template data, or a malformed address"
+          },
+          "401": {
+            "description": "Missing or unknown X-Service-Key"
+          },
+          "429": {
+            "description": "Rate limited"
+          },
+          "503": {
+            "description": "FEATURE_UNAVAILABLE — no mail credentials configured on this deployment"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/password-reset/request": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "requestPasswordReset",
+        "security": [],
+        "summary": "Request an emailed password reset code",
+        "description": "Mails a six-digit, single-use code to the address, if it belongs to an **active** platform admin. Unauthenticated, because it has to be — someone who has forgotten their password has no credential to present.\n\n**This always answers `200`.** An unknown address, a suspended account and a failure to send the mail are indistinguishable to the caller, and that is deliberate: an endpoint that says \"no such account\" is an oracle for who administers this platform, which is exactly the list someone would want before guessing passwords or writing a convincing phishing mail. The distinctions are real and they are written to the server log, not to the response.\n\nThe one exception is `503 FEATURE_UNAVAILABLE`, when the deployment has no mail credentials configured. That says nothing about the account and everything about the deployment, and hiding it would leave the caller waiting for a code that can never be sent.\n\nRequesting again invalidates any previous code, so only the newest one works — otherwise an account with three requested codes has three live credentials, and the oldest is the one most likely to have been forwarded or seen.\n\nRate limited by `AUTH_RATE_PER_MINUTE`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "example": "munkherdene.ts9234@gmail.com"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Always, whether or not the address belongs to an account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "sent": {
+                              "type": "boolean",
+                              "example": true
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "If that address belongs to an account, a reset code is on its way."
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed email address"
+          },
+          "429": {
+            "description": "Rate limited"
+          },
+          "503": {
+            "description": "FEATURE_UNAVAILABLE — no mail credentials configured"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/password-reset/confirm": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "confirmPasswordReset",
+        "security": [],
+        "summary": "Set a new password using an emailed code",
+        "description": "Verifies the code and sets the new password.\n\n**Every failure is the same error**, with one message and one code: a wrong code, an expired one, one already used, and an address with no outstanding code are not distinguishable from outside. Same reasoning as the request step — the differences belong in our log.\n\nA six-digit code is a million possibilities, which is only safe because of three limits together: it is **single-use**, it **expires in 10 minutes**, and the reset is **burned after 5 wrong guesses**. Remove any one and the other two stop being enough. Codes are stored hashed, and compared in constant time so a partial match leaks nothing.\n\nOn success every remaining code for that user is invalidated, and a `password_changed` notice is mailed — a password change the owner did not make is the one thing they must hear about immediately.\n\n**No token is returned.** Sign in with the new password as a separate step: a reset flow that hands back a live session turns any weakness in it directly into account access.\n\nNote that existing sessions are NOT revoked. Tokens are Ed25519-signed and verified offline by every product service, so a token already issued keeps working until `TOKEN_TTL` expires — at most 24h, one hour by default. That is the cost of offline verification, and it is a deliberate trade, not an oversight.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email",
+                  "code",
+                  "new_password"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "example": "munkherdene.ts9234@gmail.com"
+                  },
+                  "code": {
+                    "type": "string",
+                    "example": "048213",
+                    "description": "The six-digit code from the email."
+                  },
+                  "new_password": {
+                    "type": "string",
+                    "minLength": 8,
+                    "example": "a-new-strong-password"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "reset": {
+                              "type": "boolean",
+                              "example": true
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or spent code, or a new password shorter than 8 characters"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "A superadmin token from `POST /api/v1/admin/login`, signed with Ed25519 (`alg: EdDSA`) rather than a shared HMAC secret — see the top-level description for why that split matters. Verified OFFLINE: nothing here confirms the platform user still exists or is still active, so a suspension takes effect only when the token's `exp` (bounded by `TOKEN_TTL`, at most 24h) is reached, not the instant an operator suspends the account.\n\nOn failure: missing header, malformed token, expired token, wrong signature and an impossible role are ALL collapsed into the same `401 UNAUTHORIZED` — a caller learns nothing from which one it was; the specifics are in the server log. A well-formed token for a non-superadmin role (there are none issued by this service today, but the check exists for when tenant-user login moves here) gets `403 FORBIDDEN` instead."
+      },
+      "serviceKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Service-Key",
+        "description": "One key per product service — digitalservice, carwash, whatever comes next — from `POST /api/v1/admin/service-clients`. Deliberately not a shared secret: when one service's key leaks, only that key is revoked, and nothing else needs to be redeployed at three in the morning.\n\nOn failure: missing or unrecognised is `401 UNAUTHORIZED` in the `SERVICE` domain; a recognised-but-revoked key is `403 FORBIDDEN`, also `SERVICE`. This is a completely different credential from a tenant's own API key (`X-Tenant-Key`) — holding one never grants the other."
+      },
+      "tenantApiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Tenant-Key",
+        "description": "The tenant's own API key, the same one `POST /api/v1/admin/tenants` (or a rotation) issued to that business. Used only on `GET /svc/entitlements`, alongside `X-Service-Key`, to say WHICH tenant the calling product is asking about. It is not a substitute for a service key and does not by itself authenticate a product service — both headers are required together on that route."
+      }
+    },
+    "parameters": {
+      "ObjectId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{24}$"
+        },
+        "description": "A 24-character hex MongoDB ObjectId."
+      },
+      "Page": {
+        "name": "page",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "description": "1-based. Anything less than 1 is clamped to 1."
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "description": "Page size. Out of range (or omitted) falls back to the endpoint's own default, never to an error."
+      },
+      "Lang": {
+        "name": "lang",
+        "in": "query",
+        "description": "Language to resolve the copy into, e.g. `en` or `mn`. Defaults to `en`. An unrecognised value is NOT an error - the resolver falls back to English and then to whichever translation exists, because a blank page is a worse answer than the wrong language.",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "default": "en"
+        }
+      },
+      "PublicLimit": {
+        "name": "limit",
+        "in": "query",
+        "description": "Maximum items to return. Clamped server-side; an unauthenticated caller cannot ask for the whole collection.",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        }
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Missing, malformed or expired credential",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "BadRequest": {
+        "description": "Malformed request — an invalid id, a body that failed to parse, a required field missing",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "No resource with this id",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "ValidationFailed": {
+        "description": "The body parsed but its values are not acceptable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Too many requests from this client. `Retry-After` gives the wait in seconds.",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Seconds to wait before retrying."
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "Updated": {
+        "description": "Updated",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Envelope"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "updated": {
+                          "type": "boolean",
+                          "const": true
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Envelope": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "data": {},
+          "message": {
+            "type": "string"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": [
+          "success",
+          "error"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": false
+          },
+          "message": {
+            "type": "string",
+            "description": "Kept alongside `error` because existing clients read it. New clients branch on `error.code`."
+          },
+          "error": {
+            "$ref": "#/components/schemas/ApiError"
+          }
+        }
+      },
+      "ApiError": {
+        "type": "object",
+        "required": [
+          "domain",
+          "code",
+          "message"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string",
+            "description": "The subsystem the failure came from. Useful for alerting: \"every 5xx today is DOMAIN=SERVICE\" is a far more actionable page than \"the API is throwing 500s\".",
+            "enum": [
+              "GENERAL",
+              "AUTH",
+              "TENANT",
+              "PLAN",
+              "SUBSCRIPTION",
+              "DB",
+              "SERVICE"
+            ]
+          },
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "message": {
+            "type": "string",
+            "description": "Prose. Safe to show a user; never branch on it."
+          },
+          "stack_trace": {
+            "type": "string",
+            "description": "Development only (APP_ENV != production). Never present in production."
+          }
+        }
+      },
+      "ErrorCode": {
+        "type": "string",
+        "description": "The closed set of codes this API is allowed to return, kept IDENTICAL to the vocabulary used by digitalservice and carwash so a client speaking to more than one of these services does not have to learn multiple taxonomies for the same failure. Not every code below is reachable from every route in this contract — SUBSCRIPTION_REQUIRED, MODULE_NOT_ENTITLED and LIMIT_EXCEEDED, for instance, are what a PRODUCT SERVICE returns to ITS OWN callers using the entitlement this API hands it; tenantcore itself never subscribes to another platform, so it never emits them, but the codes are part of the shared vocabulary this service's `pkg/apierr` also exposes.",
+        "enum": [
+          "INTERNAL_ERROR",
+          "BAD_REQUEST",
+          "UNAUTHORIZED",
+          "FORBIDDEN",
+          "NOT_FOUND",
+          "CONFLICT",
+          "VALIDATION_FAILED",
+          "UPSTREAM_ERROR",
+          "RATE_LIMITED",
+          "FEATURE_UNAVAILABLE",
+          "SUBSCRIPTION_REQUIRED",
+          "MODULE_NOT_ENTITLED",
+          "LIMIT_EXCEEDED"
+        ]
+      },
+      "Meta": {
+        "type": "object",
+        "description": "Present on list responses only.",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        }
+      },
+      "Readiness": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok"
+          },
+          "env": {
+            "type": "string",
+            "enum": [
+              "development",
+              "production",
+              "test"
+            ]
+          },
+          "degraded": {
+            "type": "boolean",
+            "description": "True when any feature below is disabled. Alert on this, not on the HTTP status — it is always 200."
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "enum": [
+                    "superadmin_bootstrap",
+                    "public_key_endpoint",
+                    "rate_limiting"
+                  ]
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "detail": {
+                  "type": "string",
+                  "description": "Present only when `enabled` is false — says which environment variable to set."
+                }
+              }
+            }
+          }
+        }
+      },
+      "WellKnown": {
+        "type": "object",
+        "properties": {
+          "alg": {
+            "type": "string",
+            "const": "EdDSA"
+          },
+          "kid": {
+            "type": "string",
+            "description": "Identifies which key signed a token, for rotation: publish both keys, sign with the new one, let verifiers pick by the token header's kid until old tokens expire."
+          },
+          "public_key": {
+            "type": "string",
+            "description": "Base64-encoded Ed25519 public key. Verify-only — this is never the signing key."
+          },
+          "issuer": {
+            "type": "string",
+            "const": "tenantcore"
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "LoginData": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "Bearer token. Send as `Authorization: Bearer <token>`."
+          },
+          "user": {
+            "$ref": "#/components/schemas/PlatformUser"
+          }
+        }
+      },
+      "Tenant": {
+        "type": "object",
+        "description": "The API key hash has no field here and never will — an administrator sees only `api_key_last4`, enough to recognise which key a tenant is using without being able to reconstruct it.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "contact_email": {
+            "type": "string"
+          },
+          "api_key_last4": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "suspended"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CreateTenantRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "slug"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string",
+            "description": "Must be unique across every tenant."
+          },
+          "contact_email": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateTenantData": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "$ref": "#/components/schemas/Tenant"
+          },
+          "api_key": {
+            "type": "string",
+            "description": "Shown exactly once. Store it now — it cannot be retrieved later, only rotated."
+          }
+        }
+      },
+      "UpdateStatusRequest": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "suspended"
+            ]
+          }
+        }
+      },
+      "UpdateDomainRequest": {
+        "type": "object",
+        "properties": {
+          "domain": {
+            "type": "string",
+            "description": "Lower-cased and trimmed server-side. An empty string clears the binding."
+          }
+        }
+      },
+      "PlanIDBody": {
+        "type": "object",
+        "required": [
+          "plan_id"
+        ],
+        "properties": {
+          "plan_id": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{24}$"
+          },
+          "billing_day": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 28,
+            "default": 20,
+            "description": "Optional, and read by Subscribe only: Change plan keeps the subscription's existing billing day and ignores this. The day of the month the subscription renews on; outside 1 to 28 is a `400`."
+          }
+        }
+      },
+      "Subscription": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "past_due",
+              "canceled",
+              "trialing"
+            ]
+          },
+          "current_period_start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "current_period_end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "canceled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "plan": {
+            "description": "Absent when the plan was deleted out from under this subscription — a real state, not an error.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Plan"
+              }
+            ]
+          },
+          "billing_day": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 28,
+            "example": 20,
+            "description": "The day of the month this subscription renews on. A subscription with none stored behaves as 20."
+          }
+        }
+      },
+      "Plan": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "price": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "period_days": {
+            "type": "integer",
+            "description": "How long one billing period runs. Falls back to 30 if unset or non-positive when stored."
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Which products this plan grants. An empty list means the module gate is NOT enforced for tenants on this plan — a migration affordance for plans that predate modules."
+          },
+          "limits": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Numeric ceilings keyed by a name the PRODUCT defines. An absent key means unlimited, not zero."
+          },
+          "capabilities": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "description": "On/off grants keyed by a name the product defines. Absent means off."
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "sort_order": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CreatePlanRequest": {
+        "type": "object",
+        "required": [
+          "slug",
+          "name"
+        ],
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "price": {
+            "type": "number",
+            "minimum": 0
+          },
+          "currency": {
+            "type": "string"
+          },
+          "period_days": {
+            "type": "integer"
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limits": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "capabilities": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            }
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "sort_order": {
+            "type": "integer"
+          }
+        }
+      },
+      "PlatformUser": {
+        "type": "object",
+        "description": "No password hash field — same rule as Tenant.api_key_hash: it has no field to put it in, so no future edit to the underlying model can put it on the wire.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "suspended"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CreatePlatformUserRequest": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string",
+            "description": "Omit to have one generated and returned once. If sent, must be at least 8 characters."
+          }
+        }
+      },
+      "CreatePlatformUserData": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/PlatformUser"
+          },
+          "password": {
+            "type": "string",
+            "description": "Present only when the request omitted `password` — the generated value, shown exactly once."
+          }
+        }
+      },
+      "ResetPasswordRequest": {
+        "type": "object",
+        "properties": {
+          "new_password": {
+            "type": "string",
+            "description": "Omit to have one generated and returned once. If sent, must be at least 8 characters."
+          }
+        }
+      },
+      "ResetPasswordData": {
+        "type": "object",
+        "properties": {
+          "updated": {
+            "type": "boolean",
+            "const": true
+          },
+          "password": {
+            "type": "string",
+            "description": "Present only when the request omitted `new_password`."
+          }
+        }
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": "string"
+          },
+          "new_password": {
+            "type": "string",
+            "description": "At least 8 characters."
+          }
+        }
+      },
+      "ServiceClient": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "e.g. \"digitalservice\", \"carwash\"."
+          },
+          "key_last4": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "revoked"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Stamped best-effort on each successful authentication. Absent means this key has never been used."
+          }
+        }
+      },
+      "CreateServiceClientRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateServiceClientData": {
+        "type": "object",
+        "properties": {
+          "service_client": {
+            "$ref": "#/components/schemas/ServiceClient"
+          },
+          "service_key": {
+            "type": "string",
+            "description": "Shown exactly once. Put it in that product's TENANTCORE_SERVICE_KEY now."
+          }
+        }
+      },
+      "Entitlement": {
+        "type": "object",
+        "description": "The one document every product service ultimately depends on. Adding a field here is always safe; renaming or removing one is an API break, because a producing tenantcore and a consuming product service are separate copies of one wire contract, not a shared import.",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "The tenant's trading name. Carried here rather than behind a separate lookup so a product's one cached call resolves both which tenant it is serving and what to call them."
+          },
+          "slug": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "Empty string means unknown — a degraded provider that has never successfully fetched this tenant reports it this way, which is not by itself a denial.",
+            "enum": [
+              "active",
+              "trialing",
+              "past_due",
+              "canceled",
+              ""
+            ]
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the current paid period lapses. Zero/absent means no period is tracked, which is treated as not expired — an internal or comped account is not retroactively expired by leaving this blank."
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Which products this tenant may reach. An EMPTY list means no module gate is enforced for this tenant, not that they may reach nothing — a deliberate migration affordance for plans that predate modules."
+          },
+          "limits": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Numeric ceilings keyed by a name the PRODUCT defines. Absent key means unlimited, not zero — the two must stay distinguishable."
+          },
+          "features": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "description": "On/off switches keyed by a name the product defines. Absent means off."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "Set by a CONSUMER's own cache when it could not reach the platform and is serving a last-known answer — this API itself never sets it, because there is nothing to be stale about one query away from its own database. Exists so a caller can tell \"not entitled\" apart from \"we could not find out\"; a consumer must keep serving in the second case rather than treat an unreachable tenantcore as a denial."
+          }
+        }
+      },
+      "PlanMarketing": {
+        "type": "object",
+        "description": "The pricing card a visitor reads. Every field optional: a plan created for internal use - a comped account, a migration placeholder - has no card and is not forced to invent one. Nothing here is ever consulted when assembling an entitlement.",
+        "properties": {
+          "name": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "One string per language, keyed by ISO code.",
+            "example": {
+              "en": "Starter",
+              "mn": "Ehlel"
+            }
+          },
+          "tagline": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "One string per language, keyed by ISO code.",
+            "example": {
+              "en": "Starter",
+              "mn": "Ehlel"
+            }
+          },
+          "billing_note": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "One string per language, keyed by ISO code.",
+            "example": {
+              "en": "Starter",
+              "mn": "Ehlel"
+            }
+          },
+          "features": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "description": "One bullet list per language, keyed by ISO code."
+          },
+          "highlighted": {
+            "type": "boolean",
+            "description": "Draws the \"most popular\" ribbon."
+          }
+        }
+      },
+      "Image": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "caption": {
+            "type": "string"
+          }
+        },
+        "description": "A picture and its caption. The bytes live in Cloudinary; the console uploads directly and this service only stores the URL."
+      },
+      "Metric": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "One string per language, keyed by ISO code.",
+            "example": {
+              "en": "Starter",
+              "mn": "Ehlel"
+            }
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "description": "One \"73% faster\" figure on a case study. The label is bilingual; the value is not, because numbers and units read the same in both languages here."
+      },
+      "PublicPlan": {
+        "type": "object",
+        "description": "One card on the public pricing page. Locale maps are sent whole and resolved in the browser, unlike a project - the site's language toggle must not have to refetch the price list. Carries NO entitlement fields: a visitor must not be able to learn which modules a tier grants.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "One string per language, keyed by ISO code.",
+            "example": {
+              "en": "Starter",
+              "mn": "Ehlel"
+            }
+          },
+          "tagline": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "One string per language, keyed by ISO code.",
+            "example": {
+              "en": "Starter",
+              "mn": "Ehlel"
+            }
+          },
+          "price": {
+            "type": "number",
+            "description": "0 means \"not yet set\"; the site shows a placeholder."
+          },
+          "currency": {
+            "type": "string"
+          },
+          "billing_note": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "One string per language, keyed by ISO code.",
+            "example": {
+              "en": "Starter",
+              "mn": "Ehlel"
+            }
+          },
+          "features": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "description": "One bullet list per language, keyed by ISO code."
+          },
+          "highlighted": {
+            "type": "boolean"
+          },
+          "sort_order": {
+            "type": "integer"
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PublicProject": {
+        "type": "object",
+        "description": "One case study, already resolved to a single language - unlike a plan, because the prose is long and sending both languages would roughly double a page that is mostly text. `slug` is the TENANT's slug: the public URL stays put when the copy is rewritten.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "tagline": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "live_url": {
+            "type": "string",
+            "description": "Falls back to the tenant's bound domain when the case study names no site of its own."
+          },
+          "cover_image": {
+            "$ref": "#/components/schemas/Image"
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Image"
+            }
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "featured": {
+            "type": "boolean"
+          },
+          "sort_order": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TenantDetail": {
+        "type": "object",
+        "nullable": true,
+        "description": "A case study as the console edits it: every locale, unresolved. `null` when the tenant has none yet - which the console renders as an empty form, not an error.",
+        "properties": {
+          "tagline": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "One string per language, keyed by ISO code.",
+            "example": {
+              "en": "Starter",
+              "mn": "Ehlel"
+            }
+          },
+          "description": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "One string per language, keyed by ISO code.",
+            "example": {
+              "en": "Starter",
+              "mn": "Ehlel"
+            }
+          },
+          "category": {
+            "type": "string"
+          },
+          "website_url": {
+            "type": "string"
+          },
+          "cover_image": {
+            "$ref": "#/components/schemas/Image"
+          },
+          "admin_cover": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Image"
+              }
+            ],
+            "description": "Curated separately from cover_image: the full-bleed hero rarely works as a list thumbnail."
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Image"
+            }
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Metric"
+            }
+          },
+          "showcase": {
+            "type": "boolean",
+            "description": "May the public see this at all. Separate from `featured` so un-featuring does not silently unpublish."
+          },
+          "featured": {
+            "type": "boolean"
+          },
+          "sort_order": {
+            "type": "integer"
+          }
+        }
+      },
+      "UpdateProjectRequest": {
+        "type": "object",
+        "description": "A FULL REPLACE, not a patch - unlike a plan update. This is one form with one save button and every field on screen, so an omitted key means the operator cleared it. Accepting a partial document would leave a cleared gallery or an emptied metric list silently unchanged, which is the commonest reason the form is opened at all.",
+        "properties": {
+          "tagline": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "One string per language, keyed by ISO code.",
+            "example": {
+              "en": "Starter",
+              "mn": "Ehlel"
+            }
+          },
+          "description": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "One string per language, keyed by ISO code.",
+            "example": {
+              "en": "Starter",
+              "mn": "Ehlel"
+            }
+          },
+          "category": {
+            "type": "string"
+          },
+          "website_url": {
+            "type": "string"
+          },
+          "cover_image": {
+            "$ref": "#/components/schemas/Image"
+          },
+          "admin_cover": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Image"
+              }
+            ],
+            "description": "Curated separately from cover_image: the full-bleed hero rarely works as a list thumbnail."
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Image"
+            }
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Metric"
+            }
+          },
+          "showcase": {
+            "type": "boolean",
+            "description": "May the public see this at all. Separate from `featured` so un-featuring does not silently unpublish."
+          },
+          "featured": {
+            "type": "boolean"
+          },
+          "sort_order": {
+            "type": "integer"
+          }
+        }
+      },
+      "Quote": {
+        "type": "object",
+        "description": "An enquiry from the public contact form. `tenant_id` is usually ABSENT: most leads come from prospects who are not tenants of anything, which is the point of the form. `package_slug` is a slug rather than a plan id so it survives that plan being renamed or deleted - it records what the visitor clicked, which is a historical fact, not a live reference.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "company_name": {
+            "type": "string"
+          },
+          "package_slug": {
+            "type": "string"
+          },
+          "budget": {
+            "type": "string"
+          },
+          "timeline": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "contacted",
+              "quoted",
+              "closed"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CreateQuoteRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "email"
+        ],
+        "description": "Validation is deliberately thin. This is the only write on the whole service an anonymous stranger can perform, and rejecting a real lead over a formatting opinion costs far more than storing a messy one. `status`, `tenant_id` and `user_id` are NOT accepted: a quote arriving as \"closed\" would vanish from the console's working list before anyone saw it.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "company_name": {
+            "type": "string"
+          },
+          "package_slug": {
+            "type": "string"
+          },
+          "budget": {
+            "type": "string"
+          },
+          "timeline": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateQuoteStatusRequest": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "contacted",
+              "quoted",
+              "closed"
+            ]
+          }
+        }
+      },
+      "AssignPackageRequest": {
+        "type": "object",
+        "required": [
+          "package_id"
+        ],
+        "description": "`package_id` is a PLAN id. The wire name follows the console, whose vocabulary for the public price list is still \"package\"; the model underneath is a plan. Assigning grants the tenant nothing - it chooses which card that tenant displays to its own visitors.",
+        "properties": {
+          "package_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ContentEntry": {
+        "type": "object",
+        "description": "One editable leaf of the marketing site, in every language at once. `path` is the dotted route into the page's dictionary, e.g. `hero.description`.\n\nAn ARRAY is a leaf whatever it contains: `faq.items` is one entry holding the whole list, not `faq.items.0.q` and friends. Indexed paths would make deleting the second of three FAQ entries a renumbering problem.",
+        "properties": {
+          "path": {
+            "type": "string",
+            "example": "hero.description"
+          },
+          "values": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Per language, keyed by ISO code. The value may be a string, a list of strings, or a list of small objects - whatever that leaf is in the site's dictionary. A language absent here falls back to the site's own default for THAT language, not to another language's override."
+          }
+        }
+      },
+      "SitePage": {
+        "type": "object",
+        "description": "One page's overrides, every language, as the console edits them.",
+        "properties": {
+          "page": {
+            "type": "string",
+            "example": "home"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContentEntry"
+            }
+          }
+        }
+      },
+      "SavePageRequest": {
+        "type": "object",
+        "description": "Replaces the page's overrides wholesale. An entry omitted here is DELETED, which is the mechanism for putting a headline back to what the site shipped with - clearing a field and saving removes the override rather than overriding the default with an empty string and blanking a live section.",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContentEntry"
+            }
+          }
+        }
+      },
+      "SiteContent": {
+        "type": "object",
+        "description": "Every page's overrides for one language: `{page: {\"dotted.path\": value}}`.\n\nA path absent here is not empty copy - it means nobody has overridden that key and the site should use the default it shipped with. This endpoint returning `{}` is the normal state of a site nobody has edited yet, and must render exactly as the site does today.",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

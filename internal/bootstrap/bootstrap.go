@@ -26,6 +26,7 @@ import (
 	"github.com/eandstravel/tenantcore/internal/repository"
 	"github.com/eandstravel/tenantcore/internal/service"
 	"github.com/eandstravel/tenantcore/pkg/logger"
+	"github.com/eandstravel/tenantcore/pkg/mailer"
 	"github.com/eandstravel/tenantcore/pkg/token"
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -40,6 +41,13 @@ type App struct {
 
 	mongo   *mongo.Client
 	limiter *middleware.RateLimiter
+
+	// stopJobs cancels the background jobs. Nil when none were started.
+	stopJobs context.CancelFunc
+
+	// passwordReset sends its mail in the background, so shutdown drains it:
+	// a reset requested a moment before a restart should still arrive.
+	passwordReset *service.PasswordResetService
 }
 
 // New wires everything from cfg. It returns an error rather than exiting so a
@@ -87,9 +95,14 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 
 	tenants := repository.NewTenantRepo(db)
 	platformUsers := repository.NewPlatformUserRepo(db)
+	passwordResets := repository.NewPasswordResetRepo(db)
 	serviceClients := repository.NewServiceClientRepo(db)
 	plans := repository.NewPlanRepo(db)
 	subscriptions := repository.NewSubscriptionRepo(db)
+	tenantDetails := repository.NewTenantDetailRepo(db)
+	quotes := repository.NewQuoteRepo(db)
+	tenantPlans := repository.NewTenantPlanRepo(db)
+	siteContent := repository.NewSiteContentRepo(db)
 
 	platformUserSvc := service.NewPlatformUserService(platformUsers, maker, cfg.TokenTTL)
 
@@ -106,6 +119,8 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 	}
 
 	limiter := middleware.NewRateLimiter()
+	mail := buildMailer(cfg, log)
+	passwordResetSvc := service.NewPasswordResetService(platformUsers, passwordResets, mail, log)
 
 	srv := api.NewServer(api.Deps{
 		Config: cfg,
@@ -113,6 +128,7 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 
 		Auth:        middleware.NewAuth(maker.Verifier()),
 		RateLimiter: limiter,
+		Mail:        mail,
 
 		PublicKeyB64: maker.PublicKeyB64(),
 		KeyID:        maker.KeyID(),
@@ -121,8 +137,13 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 		Plan:          service.NewPlanService(plans),
 		Subscription:  service.NewSubscriptionService(subscriptions, plans),
 		PlatformUser:  platformUserSvc,
+		PasswordReset: passwordResetSvc,
 		ServiceClient: service.NewServiceClientService(serviceClients),
 		Entitlement:   service.NewEntitlementService(tenants, subscriptions, plans),
+		Showcase:      service.NewShowcaseService(tenantDetails, tenants),
+		Quote:         service.NewQuoteService(quotes),
+		TenantPlan:    service.NewTenantPlanService(tenantPlans, plans, tenants),
+		SiteContent:   service.NewSiteContentService(siteContent),
 	})
 
 	// The verifying key is logged at startup so it can be copied into a
@@ -132,11 +153,16 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 		zap.String("kid", maker.KeyID()),
 		zap.String("public_key", maker.PublicKeyB64()))
 
+	stopJobs := startExpiryNotice(cfg, log, subscriptions, tenants, plans, mail)
+
 	return &App{
-		Config:  cfg,
-		Log:     log,
-		Engine:  srv.Handler(),
-		limiter: limiter,
+		Config:   cfg,
+		Log:      log,
+		Engine:   srv.Handler(),
+		limiter:  limiter,
+		stopJobs: stopJobs,
+
+		passwordReset: passwordResetSvc,
 	}, nil
 }
 
@@ -178,12 +204,89 @@ func (a *App) Run() error {
 }
 
 func (a *App) Close(ctx context.Context) {
+	if a.stopJobs != nil {
+		a.stopJobs()
+	}
+	if a.passwordReset != nil {
+		a.passwordReset.Drain()
+	}
 	if a.limiter != nil {
 		a.limiter.Close()
 	}
 	if a.mongo != nil {
 		_ = a.mongo.Disconnect(ctx)
 	}
+}
+
+// expiryCheckInterval is how often subscriptions are checked for an approaching
+// end. The warning window is seven days, so hourly is far finer than it needs
+// to be; it is hourly so that a failed send is retried promptly rather than
+// the next day.
+const expiryCheckInterval = time.Hour
+
+// startExpiryNotice starts the hourly expiry check and returns the function
+// that stops it, or nil when the notice is not configured.
+//
+// Same rule as every optional dependency: a missing setting disables the
+// feature and says so, rather than stopping a platform four services depend
+// on. What is different is the consequence, which is why the disabled case is
+// a WARN that names it: a tenant loses write access when its subscription
+// lapses whether or not anyone was warned, so "off" means "silent lapses".
+func startExpiryNotice(
+	cfg *config.Config,
+	log *zap.Logger,
+	subs *repository.SubscriptionRepo,
+	tenants *repository.TenantRepo,
+	plans *repository.PlanRepo,
+	mail *mailer.Mailer,
+) context.CancelFunc {
+	if !cfg.ExpiryNoticeEnabled() {
+		log.Warn("expiry notice is off — EXPIRY_NOTICE_EMAIL is not set, or mail is off; " +
+			"subscriptions will lapse without warning")
+		return nil
+	}
+
+	notifier := service.NewExpiryNotifier(subs, tenants, plans, mail, cfg.ExpiryNoticeEmail, log)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go service.Every(ctx, expiryCheckInterval, func(ctx context.Context) {
+		sent, err := notifier.NotifyExpiring(ctx, time.Now())
+		switch {
+		case err != nil:
+			// The next tick retries; nothing was claimed.
+			log.Warn("expiry notice: check failed", zap.Error(err))
+		case sent > 0:
+			log.Info("expiry notice: warnings sent", zap.Int("sent", sent))
+		default:
+			log.Info("expiry notice: nothing to warn about")
+		}
+	})
+
+	log.Info("expiry notice ready",
+		zap.Duration("every", expiryCheckInterval),
+		zap.Duration("warn_window", service.ExpiryWarnWindow))
+	return cancel
+}
+
+// buildMailer returns the SMTP sender, or nil when no credentials are set.
+//
+// Same rule as every optional dependency: a missing setting disables one
+// capability and says so, rather than stopping a platform that four services
+// depend on. What it costs when off is worth naming precisely — password
+// resets are the whole reason this exists, and "mail is off" and "resets are
+// broken" are the same sentence.
+func buildMailer(cfg *config.Config, log *zap.Logger) *mailer.Mailer {
+	if !cfg.EmailEnabled() {
+		log.Warn("email is off — GMAIL_EMAIL/GMAIL_PASSWORD are not both set; " +
+			"POST /svc/notifications/email answers 503 and no password-reset mail is delivered")
+		return nil
+	}
+	m := mailer.New(mailer.Config{
+		Username: cfg.GmailEmail,
+		Password: cfg.GmailPassword,
+	})
+	log.Info("email ready", zap.String("from", m.From()))
+	return m
 }
 
 // logFeatures states every optional capability and its status at startup.

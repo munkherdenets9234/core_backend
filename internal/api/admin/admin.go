@@ -22,8 +22,13 @@ type Deps struct {
 	Plan          *service.PlanService
 	Subscription  *service.SubscriptionService
 	PlatformUser  *service.PlatformUserService
+	PasswordReset *service.PasswordResetService
 	ServiceClient *service.ServiceClientService
 	Entitlement   *service.EntitlementService
+	Showcase      *service.ShowcaseService
+	Quote         *service.QuoteService
+	TenantPlan    *service.TenantPlanService
+	SiteContent   *service.SiteContentService
 
 	AuthRateLimit gin.HandlerFunc
 }
@@ -32,6 +37,7 @@ type Deps struct {
 func Register(base *gin.RouterGroup, d Deps) {
 	publicapi.Register(base, publicapi.Deps{
 		PlatformUser:  d.PlatformUser,
+		PasswordReset: d.PasswordReset,
 		AuthRateLimit: d.AuthRateLimit,
 	})
 
@@ -47,6 +53,10 @@ func Register(base *gin.RouterGroup, d Deps) {
 		PlatformUser:  d.PlatformUser,
 		ServiceClient: d.ServiceClient,
 		Entitlement:   d.Entitlement,
+		Showcase:      d.Showcase,
+		Quote:         d.Quote,
+		TenantPlan:    d.TenantPlan,
+		SiteContent:   d.SiteContent,
 		AuthRateLimit: d.AuthRateLimit,
 	})
 }

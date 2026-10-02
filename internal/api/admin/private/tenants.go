@@ -12,9 +12,10 @@ import (
 )
 
 type tenantsController struct {
-	svc  *service.TenantService
-	subs *service.SubscriptionService
-	ent  *service.EntitlementService
+	svc      *service.TenantService
+	subs     *service.SubscriptionService
+	ent      *service.EntitlementService
+	showcase *service.ShowcaseService
 }
 
 // Create provisions a tenant and returns its API key. The key appears in
@@ -55,7 +56,24 @@ func (h *tenantsController) List(c *gin.Context) error {
 	if err != nil {
 		return err
 	}
-	response.List(c, view.TenantsOf(data), response.Meta{Total: total, Page: page, Limit: limit})
+
+	// One extra query for the whole page, so the console's showcase column
+	// has something true to say.
+	ids := make([]primitive.ObjectID, 0, len(data))
+	for _, t := range data {
+		ids = append(ids, t.ID)
+	}
+	flags, err := h.showcase.Flags(c.Request.Context(), ids)
+	if err != nil {
+		return err
+	}
+
+	out := make([]view.Tenant, 0, len(data))
+	for _, t := range data {
+		f := flags[t.ID]
+		out = append(out, view.TenantOf(t).WithProject(f.Showcase, f.Featured))
+	}
+	response.List(c, out, response.Meta{Total: total, Page: page, Limit: limit})
 	return nil
 }
 
@@ -64,7 +82,12 @@ func (h *tenantsController) Get(c *gin.Context) error {
 	if err != nil {
 		return err
 	}
-	response.OK(c, view.TenantOf(t))
+	flags, err := h.showcase.Flags(c.Request.Context(), []primitive.ObjectID{t.ID})
+	if err != nil {
+		return err
+	}
+	f := flags[t.ID]
+	response.OK(c, view.TenantOf(t).WithProject(f.Showcase, f.Featured))
 	return nil
 }
 
@@ -121,11 +144,11 @@ func (h *tenantsController) GetSubscription(c *gin.Context) error {
 }
 
 func (h *tenantsController) CreateSubscription(c *gin.Context) error {
-	tenantID, planID, err := h.tenantAndPlanID(c)
+	tenantID, planID, billingDay, err := h.tenantPlanAndDay(c)
 	if err != nil {
 		return err
 	}
-	sub, err := h.subs.Create(c.Request.Context(), tenantID, planID, apictx.ActorID(c))
+	sub, err := h.subs.Create(c.Request.Context(), tenantID, planID, billingDay, apictx.ActorID(c))
 	if err != nil {
 		return err
 	}
@@ -183,21 +206,64 @@ func (h *tenantsController) tenantID(c *gin.Context) (primitive.ObjectID, error)
 }
 
 func (h *tenantsController) tenantAndPlanID(c *gin.Context) (tenantID, planID primitive.ObjectID, err error) {
+	tenantID, planID, _, err = h.tenantPlanAndDay(c)
+	return tenantID, planID, err
+}
+
+// tenantPlanAndDay reads the tenant from the path and the plan, plus an
+// optional billing_day, from the body. The body can only be bound once, so
+// creating a subscription and changing its plan share this one reader; changing
+// the plan simply ignores the day.
+func (h *tenantsController) tenantPlanAndDay(c *gin.Context) (tenantID, planID primitive.ObjectID, billingDay int, err error) {
 	tenantID, err = h.tenantID(c)
 	if err != nil {
-		return tenantID, planID, err
+		return tenantID, planID, 0, err
 	}
 
 	var body struct {
-		PlanID string `json:"plan_id" binding:"required"`
+		PlanID     string `json:"plan_id" binding:"required"`
+		BillingDay int    `json:"billing_day"`
 	}
 	if bindErr := c.ShouldBindJSON(&body); bindErr != nil {
-		return tenantID, planID, apierr.BadRequest(bindErr.Error())
+		return tenantID, planID, 0, apierr.BadRequest(bindErr.Error())
 	}
 
 	planID, parseErr := primitive.ObjectIDFromHex(body.PlanID)
 	if parseErr != nil {
-		return tenantID, planID, apierr.BadRequest("invalid plan_id").In(apierr.DomainPlan)
+		return tenantID, planID, 0, apierr.BadRequest("invalid plan_id").In(apierr.DomainPlan)
 	}
-	return tenantID, planID, nil
+	return tenantID, planID, body.BillingDay, nil
+}
+
+// RenewSubscription extends the tenant's subscription by one plan period.
+func (h *tenantsController) RenewSubscription(c *gin.Context) error {
+	tenantID, err := h.tenantID(c)
+	if err != nil {
+		return err
+	}
+	sub, err := h.subs.Renew(c.Request.Context(), tenantID, apictx.ActorID(c))
+	if err != nil {
+		return err
+	}
+	response.OK(c, view.SubscriptionOf(sub))
+	return nil
+}
+
+// SetSubscriptionBillingDay changes the day the tenant's subscription renews on.
+func (h *tenantsController) SetSubscriptionBillingDay(c *gin.Context) error {
+	tenantID, err := h.tenantID(c)
+	if err != nil {
+		return err
+	}
+	var body struct {
+		BillingDay int `json:"billing_day" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		return apierr.BadRequest(err.Error())
+	}
+	if err := h.subs.SetBillingDay(c.Request.Context(), tenantID, body.BillingDay, apictx.ActorID(c)); err != nil {
+		return err
+	}
+	response.OK(c, gin.H{"billing_day": body.BillingDay})
+	return nil
 }
