@@ -1628,6 +1628,64 @@
         }
       }
     },
+    "/api/v1/admin/service-clients/{id}/rotate": {
+      "post": {
+        "tags": [
+          "Service Clients"
+        ],
+        "operationId": "rotateServiceClientKey",
+        "summary": "Replace a service key",
+        "description": "Returns the new raw service key. **This is the only time it is ever shown** — only its hash is stored. The old key stops working immediately, so put the new one in that product's `TENANTCORE_SERVICE_KEY` straight away. The key is swapped on the existing record in a single write: if the request fails the old key is still valid. A revoked client cannot be rotated (`409`); an unknown id is `404`.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rotated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/CreateServiceClientData"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The service client is revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/svc/entitlements/{tenant_id}": {
       "get": {
         "tags": [

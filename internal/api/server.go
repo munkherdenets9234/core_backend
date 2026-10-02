@@ -22,7 +22,7 @@ type Deps struct {
 	Auth        *middleware.Auth
 	RateLimiter *middleware.RateLimiter
 
-	// Mail is nil when SMTP_USER/SMTP_PASSWORD/MAIL_FROM_EMAIL are not all set. Only the
+	// Mail is nil when BREVO_API_KEY/MAIL_FROM_EMAIL are not both set. Only the
 	// /svc notification route uses it, and it answers FEATURE_UNAVAILABLE
 	// rather than vanishing when mail is off.
 	Mail *mailer.Mailer

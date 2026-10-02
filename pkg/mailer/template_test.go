@@ -1,6 +1,9 @@
 package mailer
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -67,51 +70,91 @@ func TestSubstitutionDoesNotRecurse(t *testing.T) {
 	}
 }
 
-// A CR or LF in a header ends it and starts another — which is how a display
-// name becomes an extra Bcc.
-//
-// The property is NOT that the text disappears: "Bcc:" sitting inside a
-// display name is inert. It is that no injected text can start its own header
-// LINE. Asserting the substring is absent would be testing the wrong thing and
-// would fail on correct code.
-func TestHeaderInjectionCannotCreateAHeaderLine(t *testing.T) {
-	msg := string(buildMessage(
+// Subject and sender name are single-line text: a CR or LF in either is
+// stripped, whatever put it there.
+func TestSingleLineFieldsCannotCarryLineBreaks(t *testing.T) {
+	p := buildPayload(
 		"Evil\r\nBcc: victim@example.com",
 		"me@example.com",
 		"you@example.com",
 		"Hi\nX-Injected: 1",
 		"body",
-	))
-
-	headers, _, found := strings.Cut(msg, "\r\n\r\n")
-	if !found {
-		t.Fatalf("no header/body separator in:\n%s", msg)
-	}
-	for _, line := range strings.Split(headers, "\r\n") {
-		name, _, ok := strings.Cut(line, ":")
-		if !ok {
-			t.Fatalf("malformed header line %q", line)
-		}
-		switch strings.TrimSpace(name) {
-		case "Bcc", "X-Injected":
-			t.Fatalf("injected text became its own header line: %q", line)
+	)
+	for name, v := range map[string]string{"sender name": p.Sender.Name, "subject": p.Subject} {
+		if strings.ContainsAny(v, "\r\n") {
+			t.Fatalf("%s kept a line break: %q", name, v)
 		}
 	}
 }
 
-// A pasted key can carry stray spaces; they are not part of the secret.
-func TestPasswordSpacesAreStripped(t *testing.T) {
-	m := New(Config{Username: "x@smtp-brevo.com", Password: "abcd efgh ijkl mnop", FromAddress: "me@example.com"})
+// A pasted key can carry stray whitespace; it is not part of the secret.
+func TestAPIKeyWhitespaceIsStripped(t *testing.T) {
+	m := New(Config{APIKey: " xkeysib-abc def\n", FromAddress: "me@example.com"})
 	if m == nil {
 		t.Fatal("expected a mailer")
 	}
-	if m.cfg.Password != "abcdefghijklmnop" {
-		t.Fatalf("password = %q, want the spaces removed", m.cfg.Password)
+	if m.cfg.APIKey != "xkeysib-abcdef" {
+		t.Fatalf("key = %q, want the whitespace removed", m.cfg.APIKey)
+	}
+}
+
+// The request must carry the key header, the verified sender and the rendered
+// template, and nothing the caller could have chosen.
+func TestSendPostsToBrevo(t *testing.T) {
+	var got struct {
+		key, ctype string
+		body       payload
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.key = r.Header.Get("api-key")
+		got.ctype = r.Header.Get("Content-Type")
+		_ = json.NewDecoder(r.Body).Decode(&got.body)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"messageId":"<x@y>"}`))
+	}))
+	defer srv.Close()
+
+	m := New(Config{APIKey: "xkeysib-test", FromAddress: "no-reply@example.com", FromName: "Console", Endpoint: srv.URL})
+	err := m.Send("me@example.com", TemplatePasswordResetCode, map[string]string{
+		"app": "Console", "name": "Bat", "code": "048213", "expires_in": "10 minutes",
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if got.key != "xkeysib-test" || got.ctype != "application/json" {
+		t.Fatalf("headers: key=%q content-type=%q", got.key, got.ctype)
+	}
+	if got.body.Sender.Email != "no-reply@example.com" || got.body.Sender.Name != "Console" {
+		t.Fatalf("sender = %+v", got.body.Sender)
+	}
+	if len(got.body.To) != 1 || got.body.To[0].Email != "me@example.com" {
+		t.Fatalf("to = %+v", got.body.To)
+	}
+	if !strings.Contains(got.body.Subject, "048213") || !strings.Contains(got.body.TextContent, "048213") {
+		t.Fatalf("code missing from subject %q / body %q", got.body.Subject, got.body.TextContent)
+	}
+}
+
+// A refusal from Brevo must surface as an error naming the status and the
+// reason, so a rejected key or sender is visible in the log.
+func TestSendReportsBrevoRefusal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"code":"unauthorized","message":"Key not found"}`))
+	}))
+	defer srv.Close()
+
+	m := New(Config{APIKey: "k", FromAddress: "a@example.com", Endpoint: srv.URL})
+	err := m.Send("me@example.com", TemplatePasswordResetCode, map[string]string{
+		"app": "X", "name": "Y", "code": "1", "expires_in": "1m",
+	})
+	if err == nil || !strings.Contains(err.Error(), "401") || !strings.Contains(err.Error(), "Key not found") {
+		t.Fatalf("err = %v, want it to name 401 and the reason", err)
 	}
 }
 
 func TestNewReturnsNilWhenUnconfigured(t *testing.T) {
-	for _, c := range []Config{{}, {Username: "u"}, {Password: "x"}, {Username: "u", Password: "x"}} {
+	for _, c := range []Config{{}, {APIKey: "k"}, {FromAddress: "a@example.com"}, {APIKey: "  "}} {
 		if New(c) != nil {
 			t.Fatalf("expected nil for %+v", c)
 		}
@@ -195,9 +238,9 @@ func TestKnownTemplatesIncludeStaffInviteAndLeadNotification(t *testing.T) {
 	}
 }
 
-// A visitor-controlled value in a subject must not be able to start a new
-// header line (e.g. an extra Bcc).
-func TestSubjectValuesCannotInjectHeaders(t *testing.T) {
+// A visitor-controlled value in a subject must not leave a line break in the
+// single-line fields (e.g. to fake an extra Bcc).
+func TestSubjectValuesCannotInjectLineBreaks(t *testing.T) {
 	evil := "x\r\nBcc: evil@example.com"
 	for _, c := range []struct {
 		tmpl Template
@@ -216,12 +259,9 @@ func TestSubjectValuesCannotInjectHeaders(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", c.tmpl, err)
 		}
-		msg := string(buildMessage("Tower", "from@example.com", "to@example.com", subject, body))
-		head := msg[:strings.Index(msg, "\r\n\r\n")]
-		for _, line := range strings.Split(head, "\r\n") {
-			if strings.HasPrefix(strings.ToLower(line), "bcc:") {
-				t.Fatalf("%s: injected header line %q", c.tmpl, line)
-			}
+		p := buildPayload("Tower", "from@example.com", "to@example.com", subject, body)
+		if strings.ContainsAny(p.Subject, "\r\n") {
+			t.Fatalf("%s: subject kept a line break: %q", c.tmpl, p.Subject)
 		}
 	}
 }
