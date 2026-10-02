@@ -256,7 +256,7 @@ type serviceClientStore interface {
 	FindByID(ctx context.Context, id primitive.ObjectID) (*models.ServiceClient, error)
 	List(ctx context.Context) ([]*models.ServiceClient, error)
 	UpdateStatus(ctx context.Context, id primitive.ObjectID, status models.ServiceClientStatus) error
-	ReplaceKey(ctx context.Context, id primitive.ObjectID, keyHash, keyLast4 string) error
+	ReplaceKey(ctx context.Context, id primitive.ObjectID, keyHash, keyLast4 string) (*models.ServiceClient, error)
 	TouchLastSeen(ctx context.Context, id primitive.ObjectID) error
 }
 
@@ -360,7 +360,8 @@ func (s *ServiceClientService) Rotate(ctx context.Context, idStr string) (*model
 		return nil, "", apierr.Internal(err)
 	}
 
-	if err := s.repo.ReplaceKey(ctx, id, hash, apikey.Last4(raw)); err != nil {
+	c, err := s.repo.ReplaceKey(ctx, id, hash, apikey.Last4(raw))
+	if err != nil {
 		if !errors.Is(err, mongo.ErrNoDocuments) {
 			return nil, "", apierr.Internal(err)
 		}
@@ -378,10 +379,8 @@ func (s *ServiceClientService) Rotate(ctx context.Context, idStr string) (*model
 		return nil, "", apierr.Internal(err)
 	}
 
-	c, err := s.repo.FindByID(ctx, id)
-	if err != nil {
-		return nil, "", apierr.Internal(err)
-	}
+	// The record came back from the same write that swapped the key; reading it
+	// again here could fail after the old key is already dead.
 	return c, raw, nil
 }
 

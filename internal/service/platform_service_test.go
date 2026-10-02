@@ -20,6 +20,7 @@ type fakeClientStore struct {
 	mu         sync.Mutex
 	byID       map[primitive.ObjectID]*models.ServiceClient
 	replaceErr error
+	findErr    error // when set, FindByID fails: a read after the swap must not matter
 }
 
 func (f *fakeClientStore) Create(context.Context, *models.ServiceClient) error { return nil }
@@ -44,6 +45,9 @@ func (f *fakeClientStore) FindByKeyHash(_ context.Context, hash string) (*models
 }
 
 func (f *fakeClientStore) FindByID(_ context.Context, id primitive.ObjectID) (*models.ServiceClient, error) {
+	if f.findErr != nil {
+		return nil, f.findErr
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	c, ok := f.byID[id]
@@ -54,18 +58,19 @@ func (f *fakeClientStore) FindByID(_ context.Context, id primitive.ObjectID) (*m
 	return &cp, nil
 }
 
-func (f *fakeClientStore) ReplaceKey(_ context.Context, id primitive.ObjectID, keyHash, keyLast4 string) error {
+func (f *fakeClientStore) ReplaceKey(_ context.Context, id primitive.ObjectID, keyHash, keyLast4 string) (*models.ServiceClient, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.replaceErr != nil {
-		return f.replaceErr
+		return nil, f.replaceErr
 	}
 	c, ok := f.byID[id]
 	if !ok || c.Status != models.ServiceClientActive {
-		return mongo.ErrNoDocuments
+		return nil, mongo.ErrNoDocuments
 	}
 	c.KeyHash, c.KeyLast4 = keyHash, keyLast4
-	return nil
+	cp := *c
+	return &cp, nil
 }
 
 func newClientFixture(t *testing.T, status models.ServiceClientStatus) (*ServiceClientService, *fakeClientStore, primitive.ObjectID, string) {
@@ -151,5 +156,21 @@ func TestServiceClientRotate_RepoFailureLeavesOldKey(t *testing.T) {
 	}
 	if _, err := svc.Authenticate(context.Background(), oldKey); err != nil {
 		t.Fatalf("old key must still authenticate: %v", err)
+	}
+}
+
+// The swap and the read-back are one write. If a second read were needed, a
+// failure of it would answer 500 for a key that has already been replaced, and
+// the new key (returned once) would be lost with the old one already dead.
+func TestServiceClientRotate_PostSwapReadFailureCannotCause500(t *testing.T) {
+	svc, store, id, _ := newClientFixture(t, models.ServiceClientActive)
+	store.findErr = errors.New("mongo: read failed")
+
+	c, newKey, err := svc.Rotate(context.Background(), id.Hex())
+	if err != nil {
+		t.Fatalf("rotate succeeded in the store, so it must succeed: %v", err)
+	}
+	if newKey == "" || c.KeyLast4 != apikey.Last4(newKey) {
+		t.Fatalf("returned record does not match the new key: %+v", c)
 	}
 }

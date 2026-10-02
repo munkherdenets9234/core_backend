@@ -146,20 +146,22 @@ func (r *ServiceClientRepo) FindByID(ctx context.Context, id primitive.ObjectID)
 	return &c, nil
 }
 
-// ReplaceKey swaps the key on an active client in one write. The status is in
-// the filter so a revoked client cannot be revived by rotation; no match
-// (missing or revoked) is mongo.ErrNoDocuments and the old key is untouched.
-func (r *ServiceClientRepo) ReplaceKey(ctx context.Context, id primitive.ObjectID, keyHash, keyLast4 string) error {
-	res, err := r.col.UpdateOne(ctx,
+// ReplaceKey swaps the key on an active client in one write and returns the
+// updated record from that same write, so there is no second read that could
+// fail after the old key is already dead. The status is in the filter so a
+// revoked client cannot be revived by rotation; no match (missing or revoked)
+// is mongo.ErrNoDocuments and the old key is untouched.
+func (r *ServiceClientRepo) ReplaceKey(ctx context.Context, id primitive.ObjectID, keyHash, keyLast4 string) (*models.ServiceClient, error) {
+	var c models.ServiceClient
+	err := r.col.FindOneAndUpdate(ctx,
 		bson.M{"_id": id, "status": models.ServiceClientActive},
-		bson.M{"$set": bson.M{"key_hash": keyHash, "key_last4": keyLast4, "updated_at": time.Now()}})
+		bson.M{"$set": bson.M{"key_hash": keyHash, "key_last4": keyLast4, "updated_at": time.Now()}},
+		options.FindOneAndUpdate().SetReturnDocument(options.After),
+	).Decode(&c)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if res.MatchedCount == 0 {
-		return mongo.ErrNoDocuments
-	}
-	return nil
+	return &c, nil
 }
 
 // TouchLastSeen records that this service authenticated, best-effort.
