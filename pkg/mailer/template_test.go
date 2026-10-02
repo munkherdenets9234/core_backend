@@ -77,7 +77,7 @@ func TestSubstitutionDoesNotRecurse(t *testing.T) {
 func TestHeaderInjectionCannotCreateAHeaderLine(t *testing.T) {
 	msg := string(buildMessage(
 		"Evil\r\nBcc: victim@example.com",
-		"me@gmail.com",
+		"me@example.com",
 		"you@example.com",
 		"Hi\nX-Injected: 1",
 		"body",
@@ -99,10 +99,9 @@ func TestHeaderInjectionCannotCreateAHeaderLine(t *testing.T) {
 	}
 }
 
-// Google shows app passwords as "abcd efgh ijkl mnop" and people paste them
-// exactly as shown; the spaces are display formatting, not the secret.
-func TestAppPasswordSpacesAreStripped(t *testing.T) {
-	m := New(Config{Username: "me@gmail.com", Password: "abcd efgh ijkl mnop"})
+// A pasted key can carry stray spaces; they are not part of the secret.
+func TestPasswordSpacesAreStripped(t *testing.T) {
+	m := New(Config{Username: "x@smtp-brevo.com", Password: "abcd efgh ijkl mnop", FromAddress: "me@example.com"})
 	if m == nil {
 		t.Fatal("expected a mailer")
 	}
@@ -112,7 +111,7 @@ func TestAppPasswordSpacesAreStripped(t *testing.T) {
 }
 
 func TestNewReturnsNilWhenUnconfigured(t *testing.T) {
-	for _, c := range []Config{{}, {Username: "me@gmail.com"}, {Password: "x"}} {
+	for _, c := range []Config{{}, {Username: "u"}, {Password: "x"}, {Username: "u", Password: "x"}} {
 		if New(c) != nil {
 			t.Fatalf("expected nil for %+v", c)
 		}

@@ -277,13 +277,17 @@ func startExpiryNotice(
 // broken" are the same sentence.
 func buildMailer(cfg *config.Config, log *zap.Logger) *mailer.Mailer {
 	if !cfg.EmailEnabled() {
-		log.Warn("email is off — GMAIL_EMAIL/GMAIL_PASSWORD are not both set; " +
+		log.Warn("email is off — SMTP_USER/SMTP_PASSWORD/MAIL_FROM_EMAIL are not all set; " +
 			"POST /svc/notifications/email answers 503 and no password-reset mail is delivered")
 		return nil
 	}
 	m := mailer.New(mailer.Config{
-		Username: cfg.GmailEmail,
-		Password: cfg.GmailPassword,
+		Host:        cfg.SMTPHost,
+		Port:        cfg.SMTPPort,
+		Username:    cfg.SMTPUser,
+		Password:    cfg.SMTPPassword,
+		FromAddress: cfg.MailFromEmail,
+		FromName:    cfg.MailFromName,
 	})
 	log.Info("email ready", zap.String("from", m.From()))
 	return m
