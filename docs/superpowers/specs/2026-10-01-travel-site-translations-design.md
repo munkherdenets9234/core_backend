@@ -107,7 +107,7 @@ The editor therefore opens on the real current wording, and an unedited key is s
 
 ## Addendum (2026-10-02): skip unchanged values with a `base` snapshot
 
-Status: draft for review. Approved in concept by the user; the written addendum has not been reviewed yet.
+Status: implemented and verified live on 2026-10-02 (digitalservice 930b9c8, admin 94385a9, site 1a9fcc9 + cccd047). Plan: `docs/superpowers/plans/2026-10-02-translations-base-snapshot.md`.
 
 ### Problem
 
