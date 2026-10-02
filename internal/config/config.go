@@ -66,18 +66,13 @@ type Config struct {
 	AuthRatePerMinute int
 	RateLimitBurst    int
 
-	// SMTP, for transactional mail (Brevo). tenantcore is the only service
-	// that holds mail credentials — products ask it to send, over /svc,
-	// rather than each carrying its own copy of this key.
+	// Transactional mail through Brevo's HTTPS API. tenantcore is the only
+	// service that holds mail credentials — products ask it to send, over
+	// /svc, rather than each carrying its own copy of this key.
 	//
-	// SMTPUser is the SMTP login Brevo shows, not the account email, and
-	// SMTPPassword is an SMTP key. MailFromEmail is the sender recipients
-	// see; it must be verified in Brevo and is a separate address from the
-	// login.
-	SMTPHost      string
-	SMTPPort      int
-	SMTPUser      string
-	SMTPPassword  string
+	// BrevoAPIKey is an API key (xkeysib-...), not an SMTP key. MailFromEmail
+	// is the sender recipients see and must be verified in Brevo.
+	BrevoAPIKey   string
 	MailFromEmail string
 	MailFromName  string
 
@@ -97,12 +92,12 @@ func (c Config) SuperadminBootstrapEnabled() bool {
 	return c.SuperadminEmail != "" && c.SuperadminPassword != ""
 }
 
-// EmailEnabled reports whether this deployment can send mail. All three are
-// required: a login with no key authenticates on every send and fails, and a
-// key with no sender is refused by Brevo, which looks like an outage rather
-// than a missing setting.
+// EmailEnabled reports whether this deployment can send mail. Both are
+// required: a sender with no key is refused on every send, and a key with no
+// sender is rejected by Brevo, which looks like an outage rather than a
+// missing setting.
 func (c Config) EmailEnabled() bool {
-	return c.SMTPUser != "" && c.SMTPPassword != "" && c.MailFromEmail != ""
+	return c.BrevoAPIKey != "" && c.MailFromEmail != ""
 }
 
 // ExpiryNoticeEnabled reports whether the subscription expiry warning can be
@@ -141,7 +136,7 @@ func (c Config) Features() []Feature {
 		{
 			Name:    "email",
 			Enabled: c.EmailEnabled(),
-			Detail: "SMTP_USER/SMTP_PASSWORD/MAIL_FROM_EMAIL are not all set — POST /svc/notifications/email " +
+			Detail: "BREVO_API_KEY/MAIL_FROM_EMAIL are not both set — POST /svc/notifications/email " +
 				"answers 503 FEATURE_UNAVAILABLE, so password-reset mail is never delivered",
 		},
 		{
@@ -223,10 +218,7 @@ func Load() *Config {
 		AuthRatePerMinute: getEnvInt("AUTH_RATE_PER_MINUTE", 10),
 		RateLimitBurst:    getEnvInt("RATE_LIMIT_BURST", 5),
 
-		SMTPHost:      getEnv("SMTP_HOST", ""),
-		SMTPPort:      getEnvInt("SMTP_PORT", 0),
-		SMTPUser:      getEnv("SMTP_USER", ""),
-		SMTPPassword:  getEnv("SMTP_PASSWORD", ""),
+		BrevoAPIKey:   getEnv("BREVO_API_KEY", ""),
 		MailFromEmail: getEnv("MAIL_FROM_EMAIL", ""),
 		MailFromName:  getEnv("MAIL_FROM_NAME", ""),
 

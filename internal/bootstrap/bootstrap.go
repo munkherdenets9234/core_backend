@@ -277,15 +277,12 @@ func startExpiryNotice(
 // broken" are the same sentence.
 func buildMailer(cfg *config.Config, log *zap.Logger) *mailer.Mailer {
 	if !cfg.EmailEnabled() {
-		log.Warn("email is off — SMTP_USER/SMTP_PASSWORD/MAIL_FROM_EMAIL are not all set; " +
+		log.Warn("email is off — BREVO_API_KEY/MAIL_FROM_EMAIL are not both set; " +
 			"POST /svc/notifications/email answers 503 and no password-reset mail is delivered")
 		return nil
 	}
 	m := mailer.New(mailer.Config{
-		Host:        cfg.SMTPHost,
-		Port:        cfg.SMTPPort,
-		Username:    cfg.SMTPUser,
-		Password:    cfg.SMTPPassword,
+		APIKey:      cfg.BrevoAPIKey,
 		FromAddress: cfg.MailFromEmail,
 		FromName:    cfg.MailFromName,
 	})
