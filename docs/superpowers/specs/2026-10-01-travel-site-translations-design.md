@@ -104,3 +104,57 @@ The editor therefore opens on the real current wording, and an unedited key is s
 - `getTranslation` becoming async touches many files. A missed `await` yields a Promise where an object is expected, which `tsc` catches.
 - A stored array override could have different item shape from the shipped one. The site's merge therefore checks arrays by item kind: if the shipped array's first item is a string, every override item must be a string; if it is an object, every override item must be an object whose keys include all of the shipped item's keys with string values. Otherwise the shipped array is kept.
 - An override equal to the shipped value is stored after seeding; later code edits to the JSON for that key will not show until the override is removed. Accepted for the first version.
+
+## Addendum (2026-10-02): skip unchanged values with a `base` snapshot
+
+Status: draft for review. Approved in concept by the user; the written addendum has not been reviewed yet.
+
+### Problem
+
+The first import stored every shipped string as an override. The site merge prefers an override over the shipped wording for every one of those paths, so a later code edit to `locales/*.json` never reaches the site, and new keys on an already-imported page can never be imported (the importer refuses to touch a page that has entries).
+
+### Idea
+
+digitalservice and the admin do not know the shipped wording, so "skip values equal to shipped" cannot be decided at save time. Instead each stored value carries a **snapshot of the shipped wording it was seeded from** (`base`). A value that still equals its snapshot has not been changed by a person, so it is not an override and the site keeps using whatever it ships *now*.
+
+### Data
+
+`ContentEntry` gains `base`: `{ path, values: {en?,mn?,ko?}, base: {en?,mn?,ko?} }`. `base` follows the same shape and limits as `values` (languages en/mn/ko, string or array of strings or flat objects, same size limits). It is optional.
+
+### Public read (the only place the rule is applied)
+
+`GET /translations?lang=` returns `values[lang]` for a path **only if** `base[lang]` is absent **or** `values[lang]` is not deeply equal to `base[lang]`. Equal means: same type, same string, same array items in the same order, same object fields. An entry with no `base` for that language behaves exactly as today (the value is an override), so existing data keeps working until it is synced.
+
+The admin read (`GET /admin/translations[/:page]`) returns everything including `base`, unfiltered, so the editor always shows every row.
+
+### Save
+
+`PUT` accepts and stores `base` as sent; the server never derives it. Validation: unknown language in `base` is a 400; each `base` value passes the same value rule as `values`; the 512 KB cap and 1000-entry cap count `values` and `base` together. Blank cleaning: a language with a blank value is dropped from `values` but its `base` is kept; an entry blank in every language is dropped with its `base` (unchanged behavior). A user resetting a field to its default needs no special handling: the value then equals `base` and stops being an override on its own.
+
+### Admin editor
+
+Each row carries its `base` untouched: it is loaded, kept in the row state, and sent back on save exactly as loaded. The editor never edits it. Nothing else changes in the UI (a "changed" badge is out of scope).
+
+### Importer: new mode `--sync`
+
+Default mode is unchanged except that a newly imported page stores `base` equal to the shipped value for every entry and language it sends. The never-overwrite rule for the default mode is untouched.
+
+`--sync` (with `--push`, `--dry-run` supported) migrates and refreshes pages that already exist. For each page: `GET` it (any unreadable, non-success or non-array response is `failed`, no write). Then for each shipped entry (after the same storable-entry filter as the import), per language the shipped file has:
+- path not stored: add it with `values = base = shipped`.
+- stored, no `base` yet (existing data): set `base = shipped`; leave `values` as stored.
+- stored with `base`, and `values == base` (unedited): set `values = base = shipped` (this is how a later code edit reaches the editor and the site).
+- stored with `base`, and `values != base` (edited by a person): keep `values`, set `base = shipped`.
+Entries stored but no longer shipped are left alone. If nothing changes for a page, no write. A page with no stored entries is created as in the default mode. The page is written with one `PUT` of the merged entry list; the response and the re-read must show the same entry count or the page is reported as failed.
+
+Live data (E&S, 37 pages) is migrated by running `--sync --push` once after deploy; values stay as they are, bases are attached.
+
+### Out of scope
+
+A "changed" badge or per-field reset button in the editor; deleting paths that are no longer shipped; changing the storable-value rule; editing structured arrays.
+
+### Testing
+
+- digitalservice: public view omits a value equal to its `base` (string, array, object array; type difference is not equal; order matters for arrays); keeps a value with no `base`; keeps a value that differs; per-language independence; admin read returns `base`; `PUT` stores `base`, rejects an unknown language or a bad `base` value, counts `base` toward the size caps; blank cleaning keeps `base` for a blanked language and drops the whole entry when all languages are blank.
+- site importer: `--sync` unit tests with an injected fetch, one per rule above; unreadable GET never writes; no change means no PUT; dry-run never PUTs; the default-mode never-overwrite tests stay green.
+- admin: `base` survives load -> serialize unchanged (string, array, object array, entry with no `base`).
+- Live: sync E&S, edit one string in the UI, confirm the public route returns only that value; change a shipped string in a throwaway local copy of the locale file, run `--sync`, confirm an unedited entry follows the new shipped wording and the edited one does not.
