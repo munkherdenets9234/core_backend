@@ -9,7 +9,9 @@ package service
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/eandstravel/tenantcore/internal/models"
 	"github.com/eandstravel/tenantcore/internal/repository"
@@ -189,16 +191,36 @@ func (s *TenantService) UpdateHosts(ctx context.Context, idStr string, hosts []s
 	return setHosts(ctx, s.repo, id, hosts)
 }
 
+// Bounds on what an administrator may bind. A host is a bare DNS name or IP
+// literal: anything that looks like a URL, a pattern or userinfo is a mistake
+// that would otherwise be stored and then never match a real Host header.
+const (
+	maxHosts   = 20
+	maxHostLen = 253
+)
+
 func setHosts(ctx context.Context, st hostStore, id primitive.ObjectID, in []string) error {
 	seen := map[string]bool{}
 	hosts := make([]string, 0, len(in))
 	for _, h := range in {
-		h = models.NormalizeHost(h)
+		// Validate the RAW value: NormalizeHost cuts at the first colon, so
+		// "https://x.com/p" would otherwise be reduced to "https" and pass.
+		raw := strings.TrimSpace(h)
+		if strings.ContainsAny(raw, `/\*@?#`) || strings.IndexFunc(raw, unicode.IsSpace) >= 0 {
+			return apierr.BadRequest("invalid host " + strconv.Quote(raw)).In(apierr.DomainTenant)
+		}
+		h = models.NormalizeHost(raw)
+		if len(h) > maxHostLen {
+			return apierr.BadRequest("host is longer than " + strconv.Itoa(maxHostLen) + " characters").In(apierr.DomainTenant)
+		}
 		if h == "" || seen[h] {
 			continue
 		}
 		seen[h] = true
 		hosts = append(hosts, h)
+	}
+	if len(hosts) > maxHosts {
+		return apierr.BadRequest("at most " + strconv.Itoa(maxHosts) + " hosts per tenant").In(apierr.DomainTenant)
 	}
 
 	// Friendly pre-check so the caller is told WHICH host is taken. It is

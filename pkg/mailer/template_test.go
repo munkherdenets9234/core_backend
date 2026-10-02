@@ -195,3 +195,34 @@ func TestKnownTemplatesIncludeStaffInviteAndLeadNotification(t *testing.T) {
 		t.Fatal("missing data must be an error")
 	}
 }
+
+// A visitor-controlled value in a subject must not be able to start a new
+// header line (e.g. an extra Bcc).
+func TestSubjectValuesCannotInjectHeaders(t *testing.T) {
+	evil := "x\r\nBcc: evil@example.com"
+	for _, c := range []struct {
+		tmpl Template
+		data map[string]string
+	}{
+		{TemplateLeadNotification, map[string]string{
+			"app": "Tower", "tenant": "Tower LLC", "lead_name": evil,
+			"lead_contact": "1", "listing": "A", "lead_url": "https://x",
+		}},
+		{TemplateStaffInvite, map[string]string{
+			"app": "Tower", "name": "Bat", "inviter": evil,
+			"invite_url": "https://x", "expires_in": "7 days",
+		}},
+	} {
+		subject, body, err := render(c.tmpl, c.data)
+		if err != nil {
+			t.Fatalf("%s: %v", c.tmpl, err)
+		}
+		msg := string(buildMessage("Tower", "from@example.com", "to@example.com", subject, body))
+		head := msg[:strings.Index(msg, "\r\n\r\n")]
+		for _, line := range strings.Split(head, "\r\n") {
+			if strings.HasPrefix(strings.ToLower(line), "bcc:") {
+				t.Fatalf("%s: injected header line %q", c.tmpl, line)
+			}
+		}
+	}
+}

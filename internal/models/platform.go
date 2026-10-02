@@ -8,6 +8,7 @@
 package models
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -119,9 +120,29 @@ type ServiceClient struct {
 // found.
 func NormalizeHost(h string) string {
 	h = strings.ToLower(strings.TrimSpace(h))
-	// Strip the port, but only when the colon is not inside an IPv6 literal.
-	if i := strings.LastIndex(h, ":"); i >= 0 && !strings.HasSuffix(h, "]") {
-		h = h[:i]
+	switch {
+	case strings.HasPrefix(h, "["):
+		// Bracketed IPv6, with or without a port: the address is what is inside.
+		if i := strings.Index(h, "]"); i > 0 {
+			return h[1:i]
+		}
+		return h
+	case strings.Count(h, ":") > 1:
+		// Bare IPv6: colons are address, not a port. Returned unchanged.
+		return h
+	case strings.Contains(h, ":"):
+		h = h[:strings.Index(h, ":")]
 	}
-	return strings.TrimSuffix(h, ".")
+	return strings.TrimRight(h, ".")
+}
+
+// MarshalJSON renders an unset Hosts as [] rather than null, so a console can
+// iterate it without a nil check.
+func (t Tenant) MarshalJSON() ([]byte, error) {
+	type plain Tenant
+	p := plain(t)
+	if p.Hosts == nil {
+		p.Hosts = []string{}
+	}
+	return json.Marshal(p)
 }

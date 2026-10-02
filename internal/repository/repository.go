@@ -43,14 +43,20 @@ type indexSpec struct {
 //
 // Unique and multikey (site_hosts is an array), so a second tenant claiming a
 // host already in anyone else's array fails with a duplicate-key error.
-// Partial on $type string so a tenant with no hosts is not indexed at all:
+// Partial on $exists so a tenant with no hosts is not indexed at all:
 // without it every such tenant would share the missing-key value and the
 // second tenant ever created would be refused.
+//
+// That makes the invariant "site_hosts is never stored as null or []": the
+// model tags it omitempty and TenantRepo.UpdateHosts $unsets on an empty list.
+// $exists (not $type) so an equality query on site_hosts is provably covered
+// by the index. UNVERIFIED against a live MongoDB: no explain() has been run
+// yet to confirm FindByHost uses this index rather than scanning.
 func siteHostsIndex() mongo.IndexModel {
 	return mongo.IndexModel{
 		Keys: bson.D{{Key: "site_hosts", Value: 1}},
 		Options: options.Index().SetUnique(true).SetPartialFilterExpression(
-			bson.M{"site_hosts": bson.M{"$type": "string"}}),
+			bson.M{"site_hosts": bson.M{"$exists": true}}),
 	}
 }
 

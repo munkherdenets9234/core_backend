@@ -40,7 +40,9 @@ const (
 
 	// TemplateStaffInvite invites a person to a tenant's product. The invite
 	// link is minted by the product; fixed fields only, no free-text message,
-	// so the inviter cannot make our address say anything they like.
+	// so there is no body for a caller to write. Values still land in the
+	// subject and body, so they are untrusted text: buildMessage strips CR/LF
+	// from every header (encodeHeader), which is what stops a value adding one.
 	TemplateStaffInvite Template = "staff_invite"
 
 	// TemplateLeadNotification tells a tenant a visitor left an enquiry. The

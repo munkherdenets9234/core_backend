@@ -24,7 +24,7 @@ func TestHostsAreUniqueAcrossTenants(t *testing.T) {
 	if m.Options.PartialFilterExpression == nil {
 		t.Fatal("the index must be partial, or every tenant with no hosts collides")
 	}
-	want := bson.M{"site_hosts": bson.M{"$type": "string"}}
+	want := bson.M{"site_hosts": bson.M{"$exists": true}}
 	if !reflect.DeepEqual(m.Options.PartialFilterExpression, want) {
 		t.Fatalf("partial filter = %#v, want %#v", m.Options.PartialFilterExpression, want)
 	}

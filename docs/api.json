@@ -3338,6 +3338,13 @@
           "domain": {
             "type": "string"
           },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Public site hostnames that resolve to this tenant (normalised, unique across tenants). `[]` when none."
+          },
           "status": {
             "type": "string",
             "enum": [

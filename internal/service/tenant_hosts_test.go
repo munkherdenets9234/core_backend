@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/eandstravel/tenantcore/internal/models"
@@ -72,5 +74,42 @@ func TestSetHostsRaceLostToTheIndexIs409(t *testing.T) {
 	var ae *apierr.APIError
 	if !errors.As(err, &ae) || ae.HTTPStatus != 409 {
 		t.Fatalf("want 409, got %v", err)
+	}
+}
+
+func TestSetHostsRejectsMalformedHosts(t *testing.T) {
+	tooLong := strings.Repeat("a", 250) + ".com" // 254 chars
+	many := make([]string, 21)
+	for i := range many {
+		many[i] = fmt.Sprintf("h%d.example.com", i)
+	}
+	cases := map[string][]string{
+		"url":        {"https://x.com/p"},
+		"whitespace": {"a b"},
+		"wildcard":   {"*.x.com"},
+		"userinfo":   {"u@x.com"},
+		"query":      {"x.com?a=1"},
+		"fragment":   {"x.com#a"},
+		"backslash":  {`x.com\p`},
+		"too long":   {tooLong},
+		"21 hosts":   many,
+	}
+	for name, in := range cases {
+		t.Run(name, func(t *testing.T) {
+			st := &fakeHostStore{owner: map[string]primitive.ObjectID{}}
+			err := setHosts(context.Background(), st, primitive.NewObjectID(), in)
+			var ae *apierr.APIError
+			if !errors.As(err, &ae) || ae.HTTPStatus != 400 {
+				t.Fatalf("want 400, got %v", err)
+			}
+			if st.saved != nil {
+				t.Fatal("nothing should be saved")
+			}
+		})
+	}
+
+	st := &fakeHostStore{owner: map[string]primitive.ObjectID{}}
+	if err := setHosts(context.Background(), st, primitive.NewObjectID(), many[:20]); err != nil {
+		t.Fatalf("20 hosts is the cap and must be accepted: %v", err)
 	}
 }
