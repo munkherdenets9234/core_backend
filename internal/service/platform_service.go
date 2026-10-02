@@ -247,8 +247,21 @@ func (s *PlatformUserService) ResetPassword(ctx context.Context, idStr, next str
 
 // ── Service clients ───────────────────────────────────────────────────────
 
+// serviceClientStore is what ServiceClientService needs from storage, as an
+// interface so the key lifecycle can be tested without a database.
+// *repository.ServiceClientRepo satisfies it.
+type serviceClientStore interface {
+	Create(ctx context.Context, c *models.ServiceClient) error
+	FindByKeyHash(ctx context.Context, hash string) (*models.ServiceClient, error)
+	FindByID(ctx context.Context, id primitive.ObjectID) (*models.ServiceClient, error)
+	List(ctx context.Context) ([]*models.ServiceClient, error)
+	UpdateStatus(ctx context.Context, id primitive.ObjectID, status models.ServiceClientStatus) error
+	ReplaceKey(ctx context.Context, id primitive.ObjectID, keyHash, keyLast4 string) error
+	TouchLastSeen(ctx context.Context, id primitive.ObjectID) error
+}
+
 type ServiceClientService struct {
-	repo *repository.ServiceClientRepo
+	repo serviceClientStore
 }
 
 func NewServiceClientService(repo *repository.ServiceClientRepo) *ServiceClientService {
@@ -327,6 +340,49 @@ func (s *ServiceClientService) Revoke(ctx context.Context, idStr string) error {
 		return apierr.Internal(err)
 	}
 	return nil
+}
+
+// Rotate replaces a service client's key and returns the new one once.
+//
+// It swaps the hash on the existing record rather than creating a second
+// record and revoking the first: the name is uniquely indexed, and a single
+// write is atomic by construction. If it fails the old key is still valid;
+// if it succeeds the old key is dead at once. A revoked client is refused,
+// because rotating would quietly bring it back to life under a new key.
+func (s *ServiceClientService) Rotate(ctx context.Context, idStr string) (*models.ServiceClient, string, error) {
+	id, err := primitive.ObjectIDFromHex(idStr)
+	if err != nil {
+		return nil, "", apierr.BadRequest("invalid service client id")
+	}
+
+	raw, hash, err := apikey.Generate()
+	if err != nil {
+		return nil, "", apierr.Internal(err)
+	}
+
+	if err := s.repo.ReplaceKey(ctx, id, hash, apikey.Last4(raw)); err != nil {
+		if !errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, "", apierr.Internal(err)
+		}
+		// No active record matched: tell "never existed" from "revoked".
+		existing, ferr := s.repo.FindByID(ctx, id)
+		if ferr != nil {
+			if errors.Is(ferr, mongo.ErrNoDocuments) {
+				return nil, "", apierr.NotFound("service client").In(apierr.DomainService)
+			}
+			return nil, "", apierr.Internal(ferr)
+		}
+		if existing.Status != models.ServiceClientActive {
+			return nil, "", apierr.Conflict("service client is revoked").In(apierr.DomainService)
+		}
+		return nil, "", apierr.Internal(err)
+	}
+
+	c, err := s.repo.FindByID(ctx, id)
+	if err != nil {
+		return nil, "", apierr.Internal(err)
+	}
+	return c, raw, nil
 }
 
 func normaliseEmail(e string) string {

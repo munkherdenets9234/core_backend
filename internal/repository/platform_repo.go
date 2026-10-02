@@ -137,6 +137,31 @@ func (r *ServiceClientRepo) UpdateStatus(ctx context.Context, id primitive.Objec
 	return updateOne(ctx, r.col, id, bson.M{"status": status})
 }
 
+// FindByID returns a service client of any status.
+func (r *ServiceClientRepo) FindByID(ctx context.Context, id primitive.ObjectID) (*models.ServiceClient, error) {
+	var c models.ServiceClient
+	if err := r.col.FindOne(ctx, bson.M{"_id": id}).Decode(&c); err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// ReplaceKey swaps the key on an active client in one write. The status is in
+// the filter so a revoked client cannot be revived by rotation; no match
+// (missing or revoked) is mongo.ErrNoDocuments and the old key is untouched.
+func (r *ServiceClientRepo) ReplaceKey(ctx context.Context, id primitive.ObjectID, keyHash, keyLast4 string) error {
+	res, err := r.col.UpdateOne(ctx,
+		bson.M{"_id": id, "status": models.ServiceClientActive},
+		bson.M{"$set": bson.M{"key_hash": keyHash, "key_last4": keyLast4, "updated_at": time.Now()}})
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
+}
+
 // TouchLastSeen records that this service authenticated, best-effort.
 //
 // Deliberately fire-and-forget at the caller: it runs on the hot path of

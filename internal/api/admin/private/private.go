@@ -106,4 +106,5 @@ func Register(base *gin.RouterGroup, d Deps) {
 	sc.POST("", clients.Create)
 	sc.GET("", clients.List)
 	sc.POST("/:id/revoke", clients.Revoke)
+	sc.POST("/:id/rotate", clients.Rotate)
 }

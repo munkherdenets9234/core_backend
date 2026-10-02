@@ -60,3 +60,17 @@ func (h *clientsController) Revoke(c *gin.Context) error {
 	response.OK(c, gin.H{"revoked": true})
 	return nil
 }
+
+// Rotate replaces a service key. The new key appears in this response and
+// nowhere else; the old one stops working the moment the write lands.
+func (h *clientsController) Rotate(c *gin.Context) error {
+	client, rawKey, err := h.svc.Rotate(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		return err
+	}
+	response.OK(c, gin.H{
+		"service_client": view.ServiceClientOf(client),
+		"service_key":    rawKey,
+	})
+	return nil
+}
