@@ -3,8 +3,8 @@
 // tenantcore is the only service that holds mail credentials. Products do not
 // send their own: they ask tenantcore to, over /svc/notifications, the same
 // way they ask it about entitlements. One account, one place to rotate a
-// password, one place to rate limit — instead of the same Gmail app password
-// copied into four .env files.
+// password, one place to rate limit — instead of the same SMTP key copied into
+// four .env files.
 //
 // It is deliberately small and template-driven. See Send: the caller names a
 // template and supplies data, never a subject and body. That is what stops a
@@ -21,23 +21,24 @@ import (
 	"time"
 )
 
-// Gmail's submission endpoint. Port 587 with STARTTLS rather than 465 with
-// implicit TLS: both work, 587 is the submission standard and is the one
-// Google documents.
+// Brevo's SMTP relay. Port 587 with STARTTLS rather than 465 with implicit
+// TLS: both work, 587 is the submission standard.
 const (
-	DefaultHost = "smtp.gmail.com"
+	DefaultHost = "smtp-relay.brevo.com"
 	DefaultPort = 587
 )
 
 type Config struct {
 	Host     string
 	Port     int
-	Username string // the full Gmail address
-	Password string // a Google APP PASSWORD, not the account password
-	// FromName is the display name recipients see. The address itself is
-	// always Username: Gmail rewrites a From it does not own, so letting a
-	// caller choose one would produce mail that silently says something else.
-	FromName string
+	Username string // the SMTP login Brevo shows, e.g. xxxx@smtp-brevo.com
+	Password string // a Brevo SMTP key, not the account password
+	// FromAddress is the sender recipients see. It is NOT the SMTP login and
+	// must be a sender verified in Brevo, or Brevo rejects the message. It is
+	// configuration, never caller input, for the same reason as the template
+	// rule on Send: a caller choosing From would make mail that says anything.
+	FromAddress string
+	FromName    string
 	Timeout  time.Duration
 }
 
@@ -47,7 +48,7 @@ type Mailer struct {
 	cfg Config
 }
 
-// New returns nil when no credentials are configured.
+// New returns nil when no credentials or no sender address are configured.
 //
 // Same rule as every other optional dependency: the process starts, says what
 // is missing at startup and on /readyz, and the routes that need it answer
@@ -55,7 +56,7 @@ type Mailer struct {
 // password is absent has turned "password resets are unavailable" into "no
 // tenant can do anything".
 func New(cfg Config) *Mailer {
-	if cfg.Username == "" || cfg.Password == "" {
+	if cfg.Username == "" || cfg.Password == "" || cfg.FromAddress == "" {
 		return nil
 	}
 	if cfg.Host == "" {
@@ -67,10 +68,9 @@ func New(cfg Config) *Mailer {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 10 * time.Second
 	}
-	// Google shows app passwords as four groups of four ("abcd efgh ijkl
-	// mnop") and people paste them exactly as shown. The spaces are display
-	// formatting, not part of the secret, and leaving them in produces an
-	// authentication failure that reads like a wrong password.
+	// A pasted key can carry stray spaces; they are never part of the secret,
+	// and leaving them in produces an authentication failure that reads like
+	// a wrong password.
 	cfg.Password = strings.ReplaceAll(cfg.Password, " ", "")
 	if cfg.FromName == "" {
 		cfg.FromName = "Inno Nomads"
@@ -86,7 +86,7 @@ func (m *Mailer) From() string {
 	if m == nil {
 		return ""
 	}
-	return m.cfg.Username
+	return m.cfg.FromAddress
 }
 
 // Send renders a named template and delivers it.
@@ -114,7 +114,7 @@ func (m *Mailer) Send(to string, tmpl Template, data map[string]string) error {
 		return err
 	}
 
-	msg := buildMessage(m.cfg.FromName, m.cfg.Username, to, subject, body)
+	msg := buildMessage(m.cfg.FromName, m.cfg.FromAddress, to, subject, body)
 	addr := net.JoinHostPort(m.cfg.Host, fmt.Sprint(m.cfg.Port))
 
 	return m.deliver(addr, to, msg)
@@ -147,10 +147,10 @@ func (m *Mailer) deliver(addr, to string, msg []byte) error {
 	if err := c.Auth(auth); err != nil {
 		// The overwhelmingly common cause, worth naming rather than passing
 		// Google's opaque 535 straight through.
-		return fmt.Errorf("mailer: auth failed (is GMAIL_PASSWORD a Google App Password, with 2FA on?): %w", err)
+		return fmt.Errorf("mailer: auth failed (are SMTP_USER and SMTP_PASSWORD a Brevo SMTP login and key, not the account login?): %w", err)
 	}
 
-	if err := c.Mail(m.cfg.Username); err != nil {
+	if err := c.Mail(m.cfg.FromAddress); err != nil {
 		return fmt.Errorf("mailer: from: %w", err)
 	}
 	if err := c.Rcpt(to); err != nil {

@@ -66,14 +66,20 @@ type Config struct {
 	AuthRatePerMinute int
 	RateLimitBurst    int
 
-	// Gmail, for transactional mail. tenantcore is the only service that
-	// holds mail credentials — products ask it to send, over /svc, rather
-	// than each carrying its own copy of this password.
+	// SMTP, for transactional mail (Brevo). tenantcore is the only service
+	// that holds mail credentials — products ask it to send, over /svc,
+	// rather than each carrying its own copy of this key.
 	//
-	// GmailPassword must be a Google APP PASSWORD (2FA on the account), not
-	// the account password; Google has rejected the latter since 2022.
-	GmailEmail    string
-	GmailPassword string
+	// SMTPUser is the SMTP login Brevo shows, not the account email, and
+	// SMTPPassword is an SMTP key. MailFromEmail is the sender recipients
+	// see; it must be verified in Brevo and is a separate address from the
+	// login.
+	SMTPHost      string
+	SMTPPort      int
+	SMTPUser      string
+	SMTPPassword  string
+	MailFromEmail string
+	MailFromName  string
 
 	// ExpiryNoticeEmail is where the platform operator is told that a
 	// tenant's subscription is about to lapse. It is the operator's own
@@ -91,11 +97,12 @@ func (c Config) SuperadminBootstrapEnabled() bool {
 	return c.SuperadminEmail != "" && c.SuperadminPassword != ""
 }
 
-// EmailEnabled reports whether this deployment can send mail. Both halves are
-// required: an address with no app password authenticates on every send and
-// fails, which looks like an outage rather than a missing setting.
+// EmailEnabled reports whether this deployment can send mail. All three are
+// required: a login with no key authenticates on every send and fails, and a
+// key with no sender is refused by Brevo, which looks like an outage rather
+// than a missing setting.
 func (c Config) EmailEnabled() bool {
-	return c.GmailEmail != "" && c.GmailPassword != ""
+	return c.SMTPUser != "" && c.SMTPPassword != "" && c.MailFromEmail != ""
 }
 
 // ExpiryNoticeEnabled reports whether the subscription expiry warning can be
@@ -134,7 +141,7 @@ func (c Config) Features() []Feature {
 		{
 			Name:    "email",
 			Enabled: c.EmailEnabled(),
-			Detail: "GMAIL_EMAIL/GMAIL_PASSWORD are not both set — POST /svc/notifications/email " +
+			Detail: "SMTP_USER/SMTP_PASSWORD/MAIL_FROM_EMAIL are not all set — POST /svc/notifications/email " +
 				"answers 503 FEATURE_UNAVAILABLE, so password-reset mail is never delivered",
 		},
 		{
@@ -216,8 +223,12 @@ func Load() *Config {
 		AuthRatePerMinute: getEnvInt("AUTH_RATE_PER_MINUTE", 10),
 		RateLimitBurst:    getEnvInt("RATE_LIMIT_BURST", 5),
 
-		GmailEmail:    getEnv("GMAIL_EMAIL", ""),
-		GmailPassword: getEnv("GMAIL_PASSWORD", ""),
+		SMTPHost:      getEnv("SMTP_HOST", ""),
+		SMTPPort:      getEnvInt("SMTP_PORT", 0),
+		SMTPUser:      getEnv("SMTP_USER", ""),
+		SMTPPassword:  getEnv("SMTP_PASSWORD", ""),
+		MailFromEmail: getEnv("MAIL_FROM_EMAIL", ""),
+		MailFromName:  getEnv("MAIL_FROM_NAME", ""),
 
 		ExpiryNoticeEmail: getEnv("EXPIRY_NOTICE_EMAIL", ""),
 	}

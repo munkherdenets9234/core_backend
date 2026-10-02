@@ -77,7 +77,7 @@ func TestSubstitutionDoesNotRecurse(t *testing.T) {
 func TestHeaderInjectionCannotCreateAHeaderLine(t *testing.T) {
 	msg := string(buildMessage(
 		"Evil\r\nBcc: victim@example.com",
-		"me@gmail.com",
+		"me@example.com",
 		"you@example.com",
 		"Hi\nX-Injected: 1",
 		"body",
@@ -99,10 +99,9 @@ func TestHeaderInjectionCannotCreateAHeaderLine(t *testing.T) {
 	}
 }
 
-// Google shows app passwords as "abcd efgh ijkl mnop" and people paste them
-// exactly as shown; the spaces are display formatting, not the secret.
-func TestAppPasswordSpacesAreStripped(t *testing.T) {
-	m := New(Config{Username: "me@gmail.com", Password: "abcd efgh ijkl mnop"})
+// A pasted key can carry stray spaces; they are not part of the secret.
+func TestPasswordSpacesAreStripped(t *testing.T) {
+	m := New(Config{Username: "x@smtp-brevo.com", Password: "abcd efgh ijkl mnop", FromAddress: "me@example.com"})
 	if m == nil {
 		t.Fatal("expected a mailer")
 	}
@@ -112,7 +111,7 @@ func TestAppPasswordSpacesAreStripped(t *testing.T) {
 }
 
 func TestNewReturnsNilWhenUnconfigured(t *testing.T) {
-	for _, c := range []Config{{}, {Username: "me@gmail.com"}, {Password: "x"}} {
+	for _, c := range []Config{{}, {Username: "u"}, {Password: "x"}, {Username: "u", Password: "x"}} {
 		if New(c) != nil {
 			t.Fatalf("expected nil for %+v", c)
 		}
@@ -161,5 +160,68 @@ func TestSubscriptionExpiringRequiresAllData(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "days_left") {
 		t.Fatalf("error should name the missing key, got %v", err)
+	}
+}
+
+func TestKnownTemplatesIncludeStaffInviteAndLeadNotification(t *testing.T) {
+	for _, name := range []string{"staff_invite", "lead_notification"} {
+		if _, ok := Known(name); !ok {
+			t.Errorf("template %q is not registered", name)
+		}
+	}
+
+	subject, body, err := render(TemplateStaffInvite, map[string]string{
+		"app": "Tower", "name": "Bat", "inviter": "Dorj", "invite_url": "https://x/accept?t=1", "expires_in": "7 days",
+	})
+	if err != nil {
+		t.Fatalf("staff_invite: %v", err)
+	}
+	if strings.Contains(subject+body, "{{") || !strings.Contains(body, "https://x/accept?t=1") {
+		t.Fatalf("staff_invite did not render fully: %q", body)
+	}
+
+	subject, body, err = render(TemplateLeadNotification, map[string]string{
+		"app": "Tower", "tenant": "Tower LLC", "lead_name": "Sara", "lead_contact": "99112233", "listing": "Unit 12A", "lead_url": "https://x/leads/1",
+	})
+	if err != nil {
+		t.Fatalf("lead_notification: %v", err)
+	}
+	if strings.Contains(subject+body, "{{") || !strings.Contains(body, "Unit 12A") {
+		t.Fatalf("lead_notification did not render fully: %q", body)
+	}
+
+	if _, _, err := render(TemplateLeadNotification, map[string]string{"app": "Tower"}); err == nil {
+		t.Fatal("missing data must be an error")
+	}
+}
+
+// A visitor-controlled value in a subject must not be able to start a new
+// header line (e.g. an extra Bcc).
+func TestSubjectValuesCannotInjectHeaders(t *testing.T) {
+	evil := "x\r\nBcc: evil@example.com"
+	for _, c := range []struct {
+		tmpl Template
+		data map[string]string
+	}{
+		{TemplateLeadNotification, map[string]string{
+			"app": "Tower", "tenant": "Tower LLC", "lead_name": evil,
+			"lead_contact": "1", "listing": "A", "lead_url": "https://x",
+		}},
+		{TemplateStaffInvite, map[string]string{
+			"app": "Tower", "name": "Bat", "inviter": evil,
+			"invite_url": "https://x", "expires_in": "7 days",
+		}},
+	} {
+		subject, body, err := render(c.tmpl, c.data)
+		if err != nil {
+			t.Fatalf("%s: %v", c.tmpl, err)
+		}
+		msg := string(buildMessage("Tower", "from@example.com", "to@example.com", subject, body))
+		head := msg[:strings.Index(msg, "\r\n\r\n")]
+		for _, line := range strings.Split(head, "\r\n") {
+			if strings.HasPrefix(strings.ToLower(line), "bcc:") {
+				t.Fatalf("%s: injected header line %q", c.tmpl, line)
+			}
+		}
 	}
 }

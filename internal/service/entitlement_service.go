@@ -24,6 +24,7 @@ type (
 	tenantSource interface {
 		FindByID(ctx context.Context, id primitive.ObjectID) (*models.Tenant, error)
 		FindByAPIKeyHash(ctx context.Context, hash string) (*models.Tenant, error)
+		FindByHost(ctx context.Context, host string) (*models.Tenant, error)
 	}
 	subscriptionSource interface {
 		FindByTenantID(ctx context.Context, tenantID primitive.ObjectID) (*models.Subscription, error)
@@ -132,6 +133,29 @@ func (s *EntitlementService) ForAPIKey(ctx context.Context, rawKey string) (enti
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return entitlement.Entitlement{}, apierr.Unauthorized("").In(apierr.DomainTenant)
+		}
+		return entitlement.Entitlement{}, apierr.Internal(err)
+	}
+	return s.For(ctx, t.ID)
+}
+
+// ForHost is the shape a product serving a public site calls: it holds the
+// visitor's hostname and nothing else. One call returns the tenant and its
+// entitlement, so the product does not keep a hostname-to-tenant table of its
+// own.
+//
+// An unknown host is a 404, like an unknown tenant id: there is no tenant to
+// report a status for. A host owned by a suspended or unsubscribed tenant
+// resolves, and For reports that as a status, exactly as ForAPIKey does.
+func (s *EntitlementService) ForHost(ctx context.Context, host string) (entitlement.Entitlement, error) {
+	host = models.NormalizeHost(host)
+	if host == "" {
+		return entitlement.Entitlement{}, apierr.NotFound("tenant").In(apierr.DomainTenant)
+	}
+	t, err := s.tenants.FindByHost(ctx, host)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return entitlement.Entitlement{}, apierr.NotFound("tenant").In(apierr.DomainTenant)
 		}
 		return entitlement.Entitlement{}, apierr.Internal(err)
 	}

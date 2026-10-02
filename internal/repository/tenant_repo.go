@@ -122,3 +122,36 @@ func (r *TenantRepo) update(ctx context.Context, id primitive.ObjectID, set bson
 	}
 	return nil
 }
+
+// FindByHost resolves a visitor's hostname to the tenant that owns it. The
+// host must already be normalised (models.NormalizeHost); site_hosts is
+// stored in that form and the match is exact. Served by the unique index on
+// site_hosts.
+func (r *TenantRepo) FindByHost(ctx context.Context, host string) (*models.Tenant, error) {
+	var t models.Tenant
+	if err := r.col.FindOne(ctx, bson.M{"site_hosts": host}).Decode(&t); err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+// UpdateHosts replaces the tenant's site hosts. An empty list unsets the
+// field rather than storing [], so the partial unique index never sees it.
+// A host already owned by another tenant fails with a duplicate-key error,
+// which the service layer turns into a 409.
+func (r *TenantRepo) UpdateHosts(ctx context.Context, id primitive.ObjectID, hosts []string) error {
+	if len(hosts) == 0 {
+		res, err := r.col.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
+			"$unset": bson.M{"site_hosts": ""},
+			"$set":   bson.M{"updated_at": time.Now()},
+		})
+		if err != nil {
+			return err
+		}
+		if res.MatchedCount == 0 {
+			return mongo.ErrNoDocuments
+		}
+		return nil
+	}
+	return r.update(ctx, id, bson.M{"site_hosts": hosts})
+}

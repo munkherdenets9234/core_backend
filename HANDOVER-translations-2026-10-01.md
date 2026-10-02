@@ -1,5 +1,19 @@
 # Travel site translations — session handover (2026-10-01)
 
+## Update 2026-10-02 (latest)
+
+- Everything described below is built, reviewed and live on E&S, including the base snapshot (open item 1, resolved). Final commits: digitalservice `930b9c8`, travel admin `94385a9`, E&S site `1a9fcc9` + `cccd047`. Spec addendum and plan: `docs/superpowers/specs/2026-10-01-travel-site-translations-design.md`, `docs/superpowers/plans/2026-10-02-translations-base-snapshot.md`.
+- Re-sync after editing `src/locales/*.json`: `node scripts/export-translations.mjs --sync --push` (`--dry-run` previews). Needs `TENANT_API_KEY` and `ADMIN_TOKEN` (from `POST /login`).
+- A backup of all 37 pages as stored before the sync was taken during the session (scratchpad, this machine only); the sync changed no values.
+- Cancellation only blocks writes, so a cancelled tenant's translations stay readable on the site; E&S ends **2026-10-20**.
+
+- **Ports / how to start (2026-10-02):** tenantcore :8092, digitalservice :8080, travel admin :3001, inno dashboard :3011, carwash :8091, carwash-web :3002. The launch-config entry `eandstravelmongolia` serves 404 on every page (its `npm --prefix` form starts Next from the repo root): start the E&S site with `npm run dev -- -p 3000` from `eandstravelmongolia/`. Port 3000 may be another project; check the page title.
+- **Pushing is blocked from this machine:** GitHub answers `Permission denied (publickey)` for `~/.ssh/id_ed25519`. Nothing from the 2026-10-01/02 sessions was pushed except what the user pushed themselves (tenantcore `backend-update` was merged as PR #1). Unpushed at last check: digitalservice 13, E&S site 7, travel admin 6, inno admin 6, inno site 1, carwash 1, carwash-web 1.
+- **Production tenantcore** is `https://core-backend-5cjs.onrender.com`. Checked 2026-10-02: `/healthz` and `/readyz` 200, public API 200, admin routes 401 without a token, `POST /api/v1/admin/password-reset/request` is registered but answers **503** because `GMAIL_EMAIL`/`GMAIL_PASSWORD` are not set on Render (`/readyz` is `degraded`; `email` and `expiry_notice` are off). Set a Google **App Password** (16 lowercase letters) there, and `EXPIRY_NOTICE_EMAIL`.
+- **Inno dashboard production 404 on password reset:** `POST <host>/admin/password-reset/request` (no `/api/v1`) is 404 on production, which is exactly the dashboard's error. The dashboard's server-side `API_URL` on Vercel must be `https://core-backend-5cjs.onrender.com/api/v1` (and `NEXT_PUBLIC_API_URL` the same); redeploy after changing. Not confirmed: the Vercel settings could not be seen.
+- **Cancelled on 2026-10-02 (by the user, in tenantcore):** Nelson Travel and Bayan Bogd (Bayan Bogd is the tenant behind carwash/carwash-web). E&S Discovery Mongolia is still active and its subscription **ends 2026-10-20**: after that its writes (including saving translations) return 402 until renewed. Plan question still open: E&S is on `starter`, the assistant had set `travel-pro`; ask the user, change nothing unasked.
+- **Credentials:** the user typed a password in chat for sign-in during the session. It is stored nowhere. Suggest changing it. Never print `.env`.
+
 Editable E&S public-site wording, in English, Mongolian and Korean, from the travel admin (System > Translations). Built and reviewed; nothing pushed. This is a session note; the standing handover is `HANDOVER.md`.
 
 - Spec: `docs/superpowers/specs/2026-10-01-travel-site-translations-design.md`

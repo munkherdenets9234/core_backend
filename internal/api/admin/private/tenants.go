@@ -119,6 +119,20 @@ func (h *tenantsController) UpdateDomain(c *gin.Context) error {
 	return nil
 }
 
+func (h *tenantsController) UpdateHosts(c *gin.Context) error {
+	var body struct {
+		Hosts []string `json:"hosts"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		return apierr.BadRequest(err.Error())
+	}
+	if err := h.svc.UpdateHosts(c.Request.Context(), c.Param("id"), body.Hosts); err != nil {
+		return err
+	}
+	response.OK(c, gin.H{"updated": true})
+	return nil
+}
+
 func (h *tenantsController) RotateAPIKey(c *gin.Context) error {
 	raw, err := h.svc.RotateAPIKey(c.Request.Context(), c.Param("id"))
 	if err != nil {

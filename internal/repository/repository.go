@@ -26,10 +26,42 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	specs := []struct {
-		collection string
-		model      mongo.IndexModel
-	}{
+	for _, s := range indexSpecs() {
+		if _, err := db.Collection(s.collection).Indexes().CreateOne(ctx, s.model); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type indexSpec struct {
+	collection string
+	model      mongo.IndexModel
+}
+
+// siteHostsIndex is what makes a site host belong to at most one tenant.
+//
+// Unique and multikey (site_hosts is an array), so a second tenant claiming a
+// host already in anyone else's array fails with a duplicate-key error.
+// Partial on $exists so a tenant with no hosts is not indexed at all:
+// without it every such tenant would share the missing-key value and the
+// second tenant ever created would be refused.
+//
+// That makes the invariant "site_hosts is never stored as null or []": the
+// model tags it omitempty and TenantRepo.UpdateHosts $unsets on an empty list.
+// $exists (not $type) so an equality query on site_hosts is provably covered
+// by the index. UNVERIFIED against a live MongoDB: no explain() has been run
+// yet to confirm FindByHost uses this index rather than scanning.
+func siteHostsIndex() mongo.IndexModel {
+	return mongo.IndexModel{
+		Keys: bson.D{{Key: "site_hosts", Value: 1}},
+		Options: options.Index().SetUnique(true).SetPartialFilterExpression(
+			bson.M{"site_hosts": bson.M{"$exists": true}}),
+	}
+}
+
+func indexSpecs() []indexSpec {
+	return []indexSpec{
 		// A tenant is found by the hash of the key on every product request
 		// that reaches us. Unique because two tenants sharing a key hash
 		// would make "which tenant is this" ambiguous at the worst moment.
@@ -41,6 +73,7 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 			Keys:    bson.D{{Key: "slug", Value: 1}},
 			Options: options.Index().SetUnique(true),
 		}},
+		{"tenants", siteHostsIndex()},
 
 		{"platform_users", mongo.IndexModel{
 			Keys:    bson.D{{Key: "email", Value: 1}},
@@ -124,11 +157,4 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 			Options: options.Index().SetExpireAfterSeconds(3600),
 		}},
 	}
-
-	for _, s := range specs {
-		if _, err := db.Collection(s.collection).Indexes().CreateOne(ctx, s.model); err != nil {
-			return err
-		}
-	}
-	return nil
 }

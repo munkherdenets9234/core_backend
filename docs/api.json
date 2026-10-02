@@ -455,6 +455,55 @@
         }
       }
     },
+    "/api/v1/admin/tenants/{id}/hosts": {
+      "put": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "updateTenantHosts",
+        "summary": "Set the public site hostnames that resolve to a tenant",
+        "description": "Replaces the whole list; an empty list clears it. Each host is normalised server-side (lowercase, port and trailing dot removed) and duplicates are dropped. Separate from `domain`, which binds the API key to an origin. A product service resolves a visitor's hostname with `GET /svc/tenants/by-host/{host}`. A host is owned by at most one tenant, enforced by a unique index: claiming one that belongs to another tenant is a 409.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateHostsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Updated"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "A host is already assigned to another tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/tenants/{id}/rotate-key": {
       "post": {
         "tags": [
@@ -1670,6 +1719,86 @@
         }
       }
     },
+    "/api/v1/svc/tenants/by-host/{host}": {
+      "get": {
+        "tags": [
+          "Service"
+        ],
+        "operationId": "getEntitlementByHost",
+        "security": [
+          {
+            "serviceKey": []
+          }
+        ],
+        "summary": "Look up a tenant's entitlement by the public hostname a visitor arrived on",
+        "description": "For a product that serves public sites for many tenants and has only the visitor's `Host`. Returns the same document as `GET /svc/entitlements/{tenant_id}`, so the product maps hostname to tenant and learns the entitlement in one call. The host is normalised first (lowercase, port and trailing dot removed). A host owned by a suspended tenant resolves, with status `canceled`; only a host nobody owns is a 404.",
+        "parameters": [
+          {
+            "name": "host",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The hostname, e.g. `tower.example.com`. Case, a port and a trailing dot are tolerated."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The entitlement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Entitlement"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or unrecognised `X-Service-Key`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The service key is recognised but revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No tenant owns this host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/svc/entitlements": {
       "get": {
         "tags": [
@@ -2594,12 +2723,14 @@
                   "template": {
                     "type": "string",
                     "enum": [
+                      "lead_notification",
                       "password_changed",
                       "password_reset",
                       "password_reset_code",
+                      "staff_invite",
                       "subscription_expiring"
                     ],
-                    "description": "Which message to send. A closed set — an unknown name is a 400 naming the valid options. `password_reset` carries a one-time link; `password_changed` is the after-the-fact notice, which exists because a password change the owner did not make is the one thing they must hear about immediately. `password_reset_code` is the same flow as `password_reset` but carries a six-digit code instead of a link. `subscription_expiring` is the operator notice that a tenant's subscription is about to lapse; tenantcore sends it itself on a timer."
+                    "description": "Which message to send. A closed set — an unknown name is a 400 naming the valid options. `password_reset` carries a one-time link; `password_changed` is the after-the-fact notice, which exists because a password change the owner did not make is the one thing they must hear about immediately. `password_reset_code` is the same flow as `password_reset` but carries a six-digit code instead of a link. `subscription_expiring` is the operator notice that a tenant's subscription is about to lapse; tenantcore sends it itself on a timer. `staff_invite` invites a person to a tenant's product (data: app, name, inviter, invite_url, expires_in); `lead_notification` tells a tenant a visitor left an enquiry (data: app, tenant, lead_name, lead_contact, listing, lead_url). Both take fixed fields only, never a free-text body."
                   },
                   "data": {
                     "type": "object",
@@ -3207,6 +3338,13 @@
           "domain": {
             "type": "string"
           },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Public site hostnames that resolve to this tenant (normalised, unique across tenants). `[]` when none."
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -3279,6 +3417,18 @@
           "domain": {
             "type": "string",
             "description": "Lower-cased and trimmed server-side. An empty string clears the binding."
+          }
+        }
+      },
+      "UpdateHostsRequest": {
+        "type": "object",
+        "properties": {
+          "hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Normalised (lowercase, no port, no trailing dot) and de-duplicated server-side. An empty list clears them."
           }
         }
       },

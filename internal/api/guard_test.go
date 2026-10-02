@@ -306,3 +306,23 @@ func fillParams(path string) string {
 	}
 	return strings.Join(parts, "/")
 }
+
+// The by-host route maps a visitor's hostname to a tenant, so it is as
+// sensitive as the other svc routes: no key and a superadmin bearer must both
+// be refused, and it must not appear in publicRoutes.
+func TestByHostRequiresServiceKey(t *testing.T) {
+	e, maker := testEngine(t)
+	const path = "/api/v1/svc/tenants/by-host/tower.example.com"
+
+	if publicRoutes["GET /api/v1/svc/tenants/by-host/:host"] {
+		t.Fatal("by-host must not be a public route")
+	}
+	assertRefused(t, e, http.MethodGet, path, nil, http.StatusUnauthorized, apierr.CodeUnauthorized)
+
+	signed, _, err := maker.Create("user-1", token.RoleSuperadmin, "", time.Hour)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	assertRefused(t, e, http.MethodGet, path, map[string]string{"Authorization": "Bearer " + signed},
+		http.StatusUnauthorized, apierr.CodeUnauthorized)
+}

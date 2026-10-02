@@ -175,7 +175,7 @@ func TestExpiryNoticeNeedsMailAndAddress(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := valid()
 			if tc.mail {
-				c.GmailEmail, c.GmailPassword = "me@gmail.com", "app-password"
+				c.SMTPUser, c.SMTPPassword, c.MailFromEmail = "x@smtp-brevo.com", "smtp-key", "me@example.com"
 			}
 			c.ExpiryNoticeEmail = tc.address
 

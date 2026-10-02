@@ -54,6 +54,12 @@ func Register(base *gin.RouterGroup, d Deps) {
 	// history, none of which are places to keep one.
 	g.GET("/entitlements", c.ByAPIKey)
 
+	// By the public site hostname a visitor arrived on. Tenant plus
+	// entitlement in one call, so a site-serving product keeps no host table.
+	// The host is a path segment rather than a header: it is not a secret, and
+	// unlike a key it is safe to appear in logs.
+	g.GET("/tenants/by-host/:host", c.ByHost)
+
 	// Mail, on behalf of a product. Rate limited on top of the service-key
 	// check: the key is a machine credential living in another service's
 	// environment, and a limit is what keeps a leaked one from emptying the
@@ -72,6 +78,15 @@ func (h *entitlementsController) ByTenantID(c *gin.Context) error {
 	}
 
 	ent, err := h.ent.For(c.Request.Context(), id)
+	if err != nil {
+		return err
+	}
+	response.OK(c, ent)
+	return nil
+}
+
+func (h *entitlementsController) ByHost(c *gin.Context) error {
+	ent, err := h.ent.ForHost(c.Request.Context(), c.Param("host"))
 	if err != nil {
 		return err
 	}
