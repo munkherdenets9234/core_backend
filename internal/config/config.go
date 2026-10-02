@@ -76,6 +76,13 @@ type Config struct {
 	MailFromEmail string
 	MailFromName  string
 
+	// Gmail SMTP, for local development ONLY. Used when the Brevo settings
+	// are absent and APP_ENV is not production, so a production deployment
+	// can never fall back to a personal Gmail account. GmailPassword is a
+	// Google App Password.
+	GmailEmail    string
+	GmailPassword string
+
 	// ExpiryNoticeEmail is where the platform operator is told that a
 	// tenant's subscription is about to lapse. It is the operator's own
 	// address, not the tenant's: the person who can renew a subscription is
@@ -92,12 +99,23 @@ func (c Config) SuperadminBootstrapEnabled() bool {
 	return c.SuperadminEmail != "" && c.SuperadminPassword != ""
 }
 
-// EmailEnabled reports whether this deployment can send mail. Both are
-// required: a sender with no key is refused on every send, and a key with no
-// sender is rejected by Brevo, which looks like an outage rather than a
+// BrevoEnabled reports whether the Brevo HTTPS transport is configured. Both
+// are required: a sender with no key is refused on every send, and a key with
+// no sender is rejected by Brevo, which looks like an outage rather than a
 // missing setting.
-func (c Config) EmailEnabled() bool {
+func (c Config) BrevoEnabled() bool {
 	return c.BrevoAPIKey != "" && c.MailFromEmail != ""
+}
+
+// GmailEnabled reports whether the development-only Gmail fallback applies.
+// It never does in production.
+func (c Config) GmailEnabled() bool {
+	return c.IsDev() && c.GmailEmail != "" && c.GmailPassword != ""
+}
+
+// EmailEnabled reports whether this deployment can send mail.
+func (c Config) EmailEnabled() bool {
+	return c.BrevoEnabled() || c.GmailEnabled()
 }
 
 // ExpiryNoticeEnabled reports whether the subscription expiry warning can be
@@ -136,7 +154,7 @@ func (c Config) Features() []Feature {
 		{
 			Name:    "email",
 			Enabled: c.EmailEnabled(),
-			Detail: "BREVO_API_KEY/MAIL_FROM_EMAIL are not both set — POST /svc/notifications/email " +
+			Detail: "BREVO_API_KEY/MAIL_FROM_EMAIL are not both set (and, in development, GMAIL_EMAIL/GMAIL_PASSWORD) — POST /svc/notifications/email " +
 				"answers 503 FEATURE_UNAVAILABLE, so password-reset mail is never delivered",
 		},
 		{
@@ -221,6 +239,9 @@ func Load() *Config {
 		BrevoAPIKey:   getEnv("BREVO_API_KEY", ""),
 		MailFromEmail: getEnv("MAIL_FROM_EMAIL", ""),
 		MailFromName:  getEnv("MAIL_FROM_NAME", ""),
+
+		GmailEmail:    getEnv("GMAIL_EMAIL", ""),
+		GmailPassword: getEnv("GMAIL_PASSWORD", ""),
 
 		ExpiryNoticeEmail: getEnv("EXPIRY_NOTICE_EMAIL", ""),
 	}
