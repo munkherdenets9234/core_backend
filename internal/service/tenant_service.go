@@ -9,6 +9,7 @@ package service
 import (
 	"context"
 	"errors"
+	"net"
 	"strconv"
 	"strings"
 	"unicode"
@@ -19,6 +20,7 @@ import (
 	"github.com/eandstravel/tenantcore/pkg/apikey"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+	"golang.org/x/net/idna"
 )
 
 type TenantService struct {
@@ -209,7 +211,16 @@ func setHosts(ctx context.Context, st hostStore, id primitive.ObjectID, in []str
 		if strings.ContainsAny(raw, `/\*@?#`) || strings.IndexFunc(raw, unicode.IsSpace) >= 0 {
 			return apierr.BadRequest("invalid host " + strconv.Quote(raw)).In(apierr.DomainTenant)
 		}
-		h = models.NormalizeHost(raw)
+		if len(raw) > maxHostLen+8 { // room for brackets and a port; checked properly below
+			return apierr.BadRequest("host is longer than " + strconv.Itoa(maxHostLen) + " characters").In(apierr.DomainTenant)
+		}
+		if raw == "" {
+			continue
+		}
+		var ok bool
+		if h, ok = canonicalHost(raw); !ok {
+			return apierr.BadRequest("invalid host " + strconv.Quote(raw)).In(apierr.DomainTenant)
+		}
 		if len(h) > maxHostLen {
 			return apierr.BadRequest("host is longer than " + strconv.Itoa(maxHostLen) + " characters").In(apierr.DomainTenant)
 		}
@@ -245,4 +256,93 @@ func setHosts(ctx context.Context, st hostStore, id primitive.ObjectID, in []str
 		return apierr.Internal(err)
 	}
 	return nil
+}
+
+// canonicalHost turns an administrator-entered host into the stored form, or
+// reports that it is not a host at all.
+//
+// The stored form is exactly what models.NormalizeHost (and the realestate
+// consumer's entitlement.NormalizeHost, which mirrors it) makes of the Host
+// header a browser sends for that site: lowercase, no port, no trailing dot,
+// IPv6 without brackets. Browsers send internationalised names as punycode,
+// so a Unicode name is converted with IDNA (Lookup profile) and stored as
+// ASCII; storing "münchen.example" would never match a request.
+//
+// Accepted: a DNS name of [a-z0-9-] labels (1-63 chars, no leading or
+// trailing hyphen, not all-numeric in the last label), or an IPv4/IPv6
+// literal with no zone. An optional :port must be digits. Everything else
+// (unbalanced brackets, '<', ',', '%', '_', control or invisible characters)
+// is refused rather than stored as a host that can never be requested.
+func canonicalHost(raw string) (string, bool) {
+	if strings.IndexFunc(raw, func(r rune) bool {
+		return unicode.IsControl(r) || unicode.Is(unicode.Cf, r)
+	}) >= 0 {
+		return "", false
+	}
+	if !validPort(raw) {
+		return "", false
+	}
+	bracketed := strings.HasPrefix(raw, "[")
+	h := models.NormalizeHost(raw)
+	if h == "" || strings.ContainsAny(h, "[]%") {
+		return "", false
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return h, true
+	}
+	if bracketed || strings.Contains(h, ":") {
+		return "", false // brackets and bare colons are for IPv6 only
+	}
+	a, err := idna.Lookup.ToASCII(h)
+	if err != nil || a != strings.ToLower(a) {
+		return "", false
+	}
+	labels := strings.Split(a, ".")
+	for _, l := range labels {
+		if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
+			return "", false
+		}
+		for i := 0; i < len(l); i++ {
+			c := l[i]
+			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+				return "", false
+			}
+		}
+	}
+	// A numeric last label is an IPv4 attempt (WHATWG URL parsing treats it
+	// as one), and net.ParseIP already refused it.
+	if last := labels[len(labels)-1]; strings.Trim(last, "0123456789") == "" {
+		return "", false
+	}
+	return a, true
+}
+
+// validPort checks the optional ":port" on a raw host: "x.com:443" and
+// "[::1]:443" pass, "x.com:" and "x.com:abc" do not. A bare IPv6 literal
+// (more than one colon, no brackets) has no port.
+func validPort(raw string) bool {
+	var port string
+	switch {
+	case strings.HasPrefix(raw, "["):
+		end := strings.Index(raw, "]")
+		if end < 0 {
+			return false
+		}
+		rest := raw[end+1:]
+		if rest == "" {
+			return true
+		}
+		if !strings.HasPrefix(rest, ":") {
+			return false
+		}
+		port = rest[1:]
+	case strings.Count(raw, ":") == 1:
+		port = raw[strings.Index(raw, ":")+1:]
+	default:
+		return true
+	}
+	if port == "" || len(port) > 5 {
+		return false
+	}
+	return strings.Trim(port, "0123456789") == ""
 }
