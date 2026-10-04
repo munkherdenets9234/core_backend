@@ -2,8 +2,10 @@ package mailer
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // Template names one message this platform can send.
@@ -186,7 +188,78 @@ func render(t Template, data map[string]string) (subject, body string, err error
 		return "", "", fmt.Errorf("mailer: template %q is missing data: %s", t, strings.Join(missing, ", "))
 	}
 
-	return substitute(def.subject, data), substitute(def.body, data), nil
+	clean, err := sanitize(data)
+	if err != nil {
+		return "", "", fmt.Errorf("mailer: template %q: %w", t, err)
+	}
+	return substitute(def.subject, clean), substitute(def.body, clean), nil
+}
+
+const (
+	// maxValueRunes caps a plain text value. Every value is untrusted (a
+	// lead's name is typed by an anonymous visitor), and none of the fixed
+	// fields needs more than a line.
+	maxValueRunes = 200
+	// maxURLLen bounds a link. Links are refused rather than truncated past
+	// it, because a cut link is a broken link that still looks valid.
+	maxURLLen = 2048
+)
+
+// httpsOnly lists the link values that must be absolute https URLs. Both are
+// minted by a product service and land in mail a person is asked to click;
+// anything else (http, javascript:, a relative path) is a caller bug or an
+// attempt to point the reader somewhere else.
+var httpsOnly = map[string]bool{"invite_url": true, "lead_url": true}
+
+// sanitize returns a copy of data safe to insert into a fixed template.
+//
+// Plain values have line breaks turned into spaces and every other control
+// or format character removed, so a value cannot add lines to the body (a visitor's lead_name
+// faking a second "Listing:" line), and are capped at maxValueRunes. Link
+// values (keys ending in _url) are never altered: one carrying a control
+// character or longer than maxURLLen is refused, and httpsOnly keys must be
+// absolute https URLs with a host.
+func sanitize(data map[string]string) (map[string]string, error) {
+	out := make(map[string]string, len(data))
+	for k, v := range data {
+		if strings.HasSuffix(k, "_url") {
+			if len(v) > maxURLLen {
+				return nil, fmt.Errorf("%s is longer than %d bytes", k, maxURLLen)
+			}
+			if strings.IndexFunc(v, isUnsafeRune) >= 0 {
+				return nil, fmt.Errorf("%s contains a control character", k)
+			}
+			if httpsOnly[k] {
+				u, err := url.Parse(v)
+				if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+					return nil, fmt.Errorf("%s must be an absolute https URL", k)
+				}
+			}
+			out[k] = v
+			continue
+		}
+		v = strings.Map(func(r rune) rune {
+			switch {
+			case r == '\r' || r == '\n' || r == '\u0085' || r == '\u2028' || r == '\u2029':
+				return ' ' // a line break becomes a space, so words stay apart
+			case isUnsafeRune(r):
+				return -1
+			}
+			return r
+		}, v)
+		if r := []rune(v); len(r) > maxValueRunes {
+			v = string(r[:maxValueRunes])
+		}
+		out[k] = v
+	}
+	return out, nil
+}
+
+// isUnsafeRune reports a rune that could break a line or hide text: C0/C1
+// controls (CR, LF, NUL, ESC, NEL), the Unicode line and paragraph
+// separators, and bidi/format characters.
+func isUnsafeRune(r rune) bool {
+	return unicode.IsControl(r) || r == '\u2028' || r == '\u2029' || unicode.Is(unicode.Cf, r)
 }
 
 // substitute replaces {{key}} with data[key].
