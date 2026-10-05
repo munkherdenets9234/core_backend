@@ -30,15 +30,18 @@
 // Rerunning is safe: every write is an upsert keyed by _id, and a second run
 // over unchanged data is a no-op. It does not delete anything on either side.
 //
-// By default a tenant that already exists in tenantcore is OVERWRITTEN with
-// the source copy, api_key_hash included. Pass -only-missing to make the
-// tenants step insert-only: tenants already in the target are never written
-// (with or without -dry-run), so a key rotated in tenantcore survives. Every
-// run, dry or not, prints the tenants whose api_key_hash differs between the
-// two databases (id, name and the last four characters of each side; never a
-// hash) and the counts of tenants inserted, skipped and overwritten.
-// -dry-run writes nothing at all. The other steps are unaffected by
-// -only-missing.
+// By default a document that already exists in tenantcore is OVERWRITTEN with
+// the source copy (tenants keep api_key_hash from the source, platform_users
+// password_hash, and so on). Pass -only-missing to make ALL FOUR steps
+// (tenants, platform_users, plans, subscriptions) insert-only: documents
+// already in the target are never written (with or without -dry-run), so a key
+// rotated, a plan edited, a password changed or a subscription cancelled in
+// tenantcore survives. Writes use $setOnInsert, so the database enforces it
+// even if the target changes during the run. Each step reports inserted and
+// skipped counts per collection. The tenants step also prints, on every run,
+// the tenants whose api_key_hash differs between the two databases (id, name
+// and the last four characters of each side; never a hash); that report is
+// tenants-only. -dry-run writes nothing at all.
 //
 // Usage:
 //
@@ -73,7 +76,7 @@ func main() {
 		toURI       = flag.String("to", envOr("MONGO_URI", "mongodb://localhost:27017"), "destination MongoDB URI (tenantcore)")
 		toDB        = flag.String("to-db", envOr("MONGO_DB", "tenantcore"), "destination database name")
 		dryRun      = flag.Bool("dry-run", false, "report what would be written and change nothing")
-		onlyMissing = flag.Bool("only-missing", false, "tenants step inserts absent tenants only and never writes one that already exists (default overwrites)")
+		onlyMissing = flag.Bool("only-missing", false, "insert-only for tenants, platform_users, plans and subscriptions: never write a document that already exists (default overwrites)")
 		timeout     = flag.Duration("timeout", 5*time.Minute, "overall timeout")
 	)
 	flag.Parse()
@@ -128,6 +131,10 @@ func main() {
 			log.Fatalf("%s: %v", step.name, err)
 		}
 		log.Printf("%-15s %d", step.name, n)
+		// tenants prints its own inserted/skipped/overwritten line.
+		if *onlyMissing && step.name != "tenants" {
+			log.Print(summaryLine(step.name, m.inserted[step.name], m.skipped[step.name]))
+		}
 	}
 
 	if *dryRun {
@@ -142,6 +149,36 @@ type migration struct {
 	to          *mongo.Database
 	dryRun      bool
 	onlyMissing bool
+
+	// inserted and skipped count, per collection, what put did under
+	// -only-missing. Unused in the default mode.
+	inserted map[string]int
+	skipped  map[string]int
+}
+
+// put writes one document for the platform_users, plans and subscriptions
+// steps. Default mode is exactly the old upsert ($set). Under -only-missing it
+// goes through insertOnly ($setOnInsert), so an existing document is never
+// touched and is counted as skipped. (The tenants step has its own decision
+// logic and key-mismatch report; that report applies to tenants only because
+// only tenants carry an api_key_hash.)
+func (m *migration) put(ctx context.Context, col string, id primitive.ObjectID, doc bson.M) error {
+	if modeFor(col, m.onlyMissing) == writeSet {
+		return m.upsert(ctx, col, id, doc)
+	}
+	wrote, err := m.insertOnly(ctx, col, id, doc)
+	if err != nil {
+		return err
+	}
+	if m.inserted == nil {
+		m.inserted, m.skipped = map[string]int{}, map[string]int{}
+	}
+	if wrote {
+		m.inserted[col]++
+	} else {
+		m.skipped[col]++
+	}
+	return nil
 }
 
 // upsert writes doc at its own _id. Upsert rather than insert so a rerun
@@ -301,7 +338,7 @@ func (m *migration) targetTenants(ctx context.Context) ([]bson.M, error) {
 // have. Both services use bcrypt hashes in a `password_hash` field.
 func (m *migration) platformUsers(ctx context.Context) (int, error) {
 	return m.each(ctx, "platform_users", func(doc bson.M, id primitive.ObjectID) error {
-		return m.upsert(ctx, "platform_users", id, doc)
+		return m.put(ctx, "platform_users", id, doc)
 	})
 }
 
@@ -341,7 +378,7 @@ func (m *migration) plans(ctx context.Context) (int, error) {
 		if plan["updated_at"] == nil {
 			plan["updated_at"] = time.Now()
 		}
-		return m.upsert(ctx, "plans", id, plan)
+		return m.put(ctx, "plans", id, plan)
 	})
 }
 
@@ -368,7 +405,7 @@ func (m *migration) subscriptions(ctx context.Context) (int, error) {
 		if v, ok := doc["user_id"]; ok && v != nil {
 			sub["user_id"] = v
 		}
-		return m.upsert(ctx, "subscriptions", id, sub)
+		return m.put(ctx, "subscriptions", id, sub)
 	})
 }
 

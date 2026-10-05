@@ -80,3 +80,26 @@ func TestWriteKind_DefaultModeUsesSet(t *testing.T) {
 		}
 	}
 }
+
+func TestModeFor_OnlyMissingNeverUsesSetForAnyCollection(t *testing.T) {
+	for _, col := range []string{"tenants", "platform_users", "plans", "subscriptions"} {
+		if got := modeFor(col, true); got != writeSetOnInsert {
+			t.Errorf("%s with onlyMissing: got %v, want writeSetOnInsert", col, got)
+		}
+		if got := modeFor(col, false); got != writeSet {
+			t.Errorf("%s default: got %v, want writeSet", col, got)
+		}
+	}
+}
+
+func TestSummaryLine_CountsOnly(t *testing.T) {
+	got := summaryLine("plans", 3, 7)
+	for _, want := range []string{"plans", "inserted=3", "skipped=7"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("summary %q missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "hash") || strings.Contains(got, "{") {
+		t.Errorf("summary carries document content: %q", got)
+	}
+}

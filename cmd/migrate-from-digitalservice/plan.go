@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -105,4 +107,18 @@ func writeKind(onlyMissing bool, _ tenantAction) writeMode {
 		return writeSetOnInsert
 	}
 	return writeSet
+}
+
+// modeFor is the write mode for a collection. The collection is part of the
+// signature so the rule "-only-missing never uses $set, for any collection"
+// is stated and tested per collection rather than assumed.
+func modeFor(col string, onlyMissing bool) writeMode {
+	_ = col
+	return writeKind(onlyMissing, actionInsert)
+}
+
+// summaryLine is the per-collection result under -only-missing. Counts only;
+// never any document content.
+func summaryLine(col string, inserted, skipped int) string {
+	return fmt.Sprintf("%-15s inserted=%d skipped=%d", col, inserted, skipped)
 }
