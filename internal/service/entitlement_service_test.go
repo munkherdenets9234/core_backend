@@ -303,3 +303,75 @@ func TestForHostUnknownIsNotFound(t *testing.T) {
 		t.Fatal("an empty host must not resolve")
 	}
 }
+
+func resolveFixture(tenant *models.Tenant, raw string) *EntitlementService {
+	tenants := &fakeTenants{
+		byID:   map[primitive.ObjectID]*models.Tenant{tenant.ID: tenant},
+		byHash: map[string]*models.Tenant{apikey.Hash(raw): tenant},
+	}
+	return NewEntitlementService(tenants, &fakeSubs{}, &fakePlans{})
+}
+
+func TestResolveByAPIKey_ActiveTenant(t *testing.T) {
+	tenant := activeTenant()
+	tenant.Slug = "tower"
+	tenant.Name = "Tower Realty"
+	tenant.Domain = "tower.example.com"
+	svc := resolveFixture(tenant, "test-key-1")
+
+	got, err := svc.ResolveByAPIKey(context.Background(), "test-key-1")
+	if err != nil {
+		t.Fatalf("ResolveByAPIKey: %v", err)
+	}
+	if got.TenantID != tenant.ID || got.Slug != "tower" || got.Name != "Tower Realty" ||
+		got.Status != "active" || got.Domain != "tower.example.com" {
+		t.Errorf("unexpected identity: %+v", got)
+	}
+	if got.Hosts == nil || len(got.Hosts) != 0 {
+		t.Errorf("hosts must be a non-nil empty slice, got %#v", got.Hosts)
+	}
+
+	tenant.Hosts = []string{"a.example.com", "b.example.com"}
+	got, err = svc.ResolveByAPIKey(context.Background(), "test-key-1")
+	if err != nil || len(got.Hosts) != 2 {
+		t.Errorf("hosts did not carry through: %v %#v", err, got.Hosts)
+	}
+}
+
+func TestResolveByAPIKey_SuspendedTenantIsStatusNotError(t *testing.T) {
+	tenant := activeTenant()
+	tenant.Status = models.TenantSuspended
+	svc := resolveFixture(tenant, "test-key-1")
+
+	got, err := svc.ResolveByAPIKey(context.Background(), "test-key-1")
+	if err != nil {
+		t.Fatalf("a suspended tenant must resolve, got %v", err)
+	}
+	if got.Status != "suspended" {
+		t.Errorf("status = %q, want suspended", got.Status)
+	}
+}
+
+func TestResolveByAPIKey_UnknownKeyIs401InTenantDomain(t *testing.T) {
+	svc := resolveFixture(activeTenant(), "test-key-1")
+
+	_, err := svc.ResolveByAPIKey(context.Background(), "test-key-nope")
+	var ae *apierr.APIError
+	if !errors.As(err, &ae) || ae.Code != apierr.CodeUnauthorized || ae.HTTPStatus != 401 {
+		t.Fatalf("got %v, want 401 UNAUTHORIZED", err)
+	}
+	if ae.Domain != apierr.DomainTenant {
+		t.Errorf("domain = %v, want tenant", ae.Domain)
+	}
+}
+
+func TestResolveByAPIKey_StoreErrorIsInternalNotUnauthorized(t *testing.T) {
+	tenants := &fakeTenants{err: errors.New("store down")}
+	svc := NewEntitlementService(tenants, &fakeSubs{}, &fakePlans{})
+
+	_, err := svc.ResolveByAPIKey(context.Background(), "test-key-1")
+	var ae *apierr.APIError
+	if !errors.As(err, &ae) || ae.Code != apierr.CodeInternal {
+		t.Fatalf("got %v, want INTERNAL_ERROR", err)
+	}
+}

@@ -1857,6 +1857,76 @@
         }
       }
     },
+    "/api/v1/svc/tenants/resolve": {
+      "get": {
+        "tags": [
+          "Service"
+        ],
+        "operationId": "resolveTenantByAPIKey",
+        "security": [
+          {
+            "serviceKey": [],
+            "tenantApiKey": []
+          }
+        ],
+        "summary": "Resolve a tenant's identity from its API key",
+        "description": "For a product that keeps no tenants collection of its own and needs only WHO a key belongs to (id, slug, name, status, domain, hosts), not the entitlement. The tenant's key travels in `X-Tenant-Key`, a header, never the path or query. An unknown tenant key is `401` in the `TENANT` domain. A **suspended** tenant is NOT an error: it resolves and `status` is `suspended`, so the caller decides what suspension means. `hosts` is always an array, empty when the tenant has none.",
+        "responses": {
+          "200": {
+            "description": "The tenant identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TenantIdentity"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing `X-Tenant-Key` header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/unrecognised `X-Service-Key`, OR an `X-Tenant-Key` that matches no tenant. `error.domain` tells the two apart: `SERVICE` or `TENANT`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The service key is recognised but revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/svc/entitlements": {
       "get": {
         "tags": [
@@ -3813,6 +3883,39 @@
           "service_key": {
             "type": "string",
             "description": "Shown exactly once. Put it in that product's TENANTCORE_SERVICE_KEY now."
+          }
+        }
+      },
+      "TenantIdentity": {
+        "type": "object",
+        "description": "Who a tenant API key belongs to, without the entitlement. Adding a field is safe; renaming or removing one is an API break.",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "suspended"
+            ]
+          },
+          "domain": {
+            "type": "string",
+            "description": "The origin the API key is bound to; empty when unbound."
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Public site hostnames mapped to the tenant; an empty array when none."
           }
         }
       },

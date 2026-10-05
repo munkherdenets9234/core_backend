@@ -9,6 +9,29 @@ tenant has bought — and answers one question for the products:
 It does not know what any product sells. Adding a product is a new module
 name in a plan, not a change here.
 
+## The platform principle
+
+**Tenantcore is responsible for all tenant-related information and
+management.** That means a tenant's identity (name, slug, contact), its API
+key (issue, rotate, revoke), its status (active or suspended), its domain and
+hosts, its plan and its subscription. These are created, changed and read
+here and nowhere else.
+
+**A product service does not manage tenants. It provides its service to a
+tenant that tenantcore has already identified.** A product holds one
+credential of its own (a service key) and, on each request, asks tenantcore
+who the caller's API key belongs to and whether that tenant may proceed. It
+keeps only what it sells (its content, bookings, users), keyed by the tenant's
+`_id`, which is the same value everywhere.
+
+This is the direction of travel, not yet the whole of today's state:
+digitalservice still keeps a duplicate `tenants` collection and resolves
+`X-API-Key` against it, which is how the two copies drifted (see
+`docs/superpowers/specs/2026-10-05-central-tenant-resolution-design.md`).
+Carwash already resolves through tenantcore. New products should follow the
+carwash pattern from day one: no local tenants collection, no tenant
+management routes.
+
 ## What it owns
 
 | | |
@@ -124,6 +147,11 @@ a live subscription, and a suspended tenant (reported as a status).
 1. `POST /api/v1/admin/service-clients` → returns a key, once.
 2. Put it in that service's `TENANTCORE_SERVICE_KEY`.
 3. Point its entitlement client at `/api/v1/svc/entitlements`.
+
+A product that keeps no tenants collection of its own can resolve a tenant's
+key to its identity (id, slug, name, status, domain, hosts) with
+`GET /api/v1/svc/tenants/resolve`, sending the key in `X-Tenant-Key`. An unknown
+key is a 401; a suspended tenant resolves with `status: suspended`.
 
 In digitalservice that last step is replacing one implementation of
 `entitlement.Provider` — the interface already exists and every call site is
