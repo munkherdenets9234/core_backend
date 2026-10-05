@@ -122,3 +122,18 @@ func modeFor(col string, onlyMissing bool) writeMode {
 func summaryLine(col string, inserted, skipped int) string {
 	return fmt.Sprintf("%-15s inserted=%d skipped=%d", col, inserted, skipped)
 }
+
+// wouldInsert is the dry-run decision for one document under -only-missing:
+// true when the target has no document with that id. It only informs counts;
+// a real write never relies on it and always goes through $setOnInsert.
+func wouldInsert(existing map[primitive.ObjectID]bool, id primitive.ObjectID) bool {
+	return !existing[id]
+}
+
+// planLabel marks a dry-run line as a plan rather than a result.
+func planLabel(dryRun bool, line string) string {
+	if dryRun {
+		return "would: " + line
+	}
+	return line
+}

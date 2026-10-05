@@ -103,3 +103,26 @@ func TestSummaryLine_CountsOnly(t *testing.T) {
 		t.Errorf("summary carries document content: %q", got)
 	}
 }
+
+func TestWouldInsert_DecidesFromExistingIDSet(t *testing.T) {
+	have, missing := primitive.NewObjectID(), primitive.NewObjectID()
+	existing := map[primitive.ObjectID]bool{have: true}
+	if wouldInsert(existing, have) {
+		t.Error("existing id must be skipped, not inserted")
+	}
+	if !wouldInsert(existing, missing) {
+		t.Error("absent id must be inserted")
+	}
+	if !wouldInsert(nil, missing) {
+		t.Error("empty target must insert")
+	}
+}
+
+func TestPlanLabel_OnlyInDryRun(t *testing.T) {
+	if got := planLabel(true, "x"); got != "would: x" {
+		t.Errorf("got %q", got)
+	}
+	if got := planLabel(false, "x"); got != "x" {
+		t.Errorf("got %q", got)
+	}
+}

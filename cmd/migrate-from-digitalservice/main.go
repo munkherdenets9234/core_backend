@@ -133,7 +133,7 @@ func main() {
 		log.Printf("%-15s %d", step.name, n)
 		// tenants prints its own inserted/skipped/overwritten line.
 		if *onlyMissing && step.name != "tenants" {
-			log.Print(summaryLine(step.name, m.inserted[step.name], m.skipped[step.name]))
+			log.Print(planLabel(*dryRun, summaryLine(step.name, m.inserted[step.name], m.skipped[step.name])))
 		}
 	}
 
@@ -154,6 +154,30 @@ type migration struct {
 	// -only-missing. Unused in the default mode.
 	inserted map[string]int
 	skipped  map[string]int
+
+	// snapshots holds, per collection, the target's existing ids, read once
+	// and only in a -dry-run -only-missing run.
+	snapshots map[string]map[primitive.ObjectID]bool
+}
+
+// targetIDs is a read-only listing of the _ids already in a TARGET collection.
+func (m *migration) targetIDs(ctx context.Context, col string) (map[primitive.ObjectID]bool, error) {
+	cur, err := m.to.Collection(col).Find(ctx, bson.M{}, options.Find().SetProjection(bson.M{"_id": 1}))
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	ids := map[primitive.ObjectID]bool{}
+	for cur.Next(ctx) {
+		var d struct {
+			ID primitive.ObjectID `bson:"_id"`
+		}
+		if err := cur.Decode(&d); err != nil {
+			return nil, err
+		}
+		ids[d.ID] = true
+	}
+	return ids, cur.Err()
 }
 
 // put writes one document for the platform_users, plans and subscriptions
@@ -166,12 +190,34 @@ func (m *migration) put(ctx context.Context, col string, id primitive.ObjectID, 
 	if modeFor(col, m.onlyMissing) == writeSet {
 		return m.upsert(ctx, col, id, doc)
 	}
+	if m.inserted == nil {
+		m.inserted, m.skipped = map[string]int{}, map[string]int{}
+	}
+	if m.dryRun {
+		// Nothing is written. A read-only snapshot of the target's ids makes
+		// the counts a true plan; it only informs reporting and never decides
+		// a real write, which always goes through insertOnly below.
+		if m.snapshots == nil {
+			m.snapshots = map[string]map[primitive.ObjectID]bool{}
+		}
+		ids, ok := m.snapshots[col]
+		if !ok {
+			var err error
+			if ids, err = m.targetIDs(ctx, col); err != nil {
+				return err
+			}
+			m.snapshots[col] = ids
+		}
+		if wouldInsert(ids, id) {
+			m.inserted[col]++
+		} else {
+			m.skipped[col]++
+		}
+		return nil
+	}
 	wrote, err := m.insertOnly(ctx, col, id, doc)
 	if err != nil {
 		return err
-	}
-	if m.inserted == nil {
-		m.inserted, m.skipped = map[string]int{}, map[string]int{}
 	}
 	if wrote {
 		m.inserted[col]++
@@ -313,7 +359,7 @@ func (m *migration) tenants(ctx context.Context) (int, error) {
 	for _, mm := range mismatches {
 		log.Printf("  mismatch id=%s name=%q source=...%s target=...%s", mm.ID.Hex(), mm.Name, mm.SourceLast4, mm.TargetLast4)
 	}
-	log.Printf("tenants inserted=%d skipped=%d overwritten=%d", inserted, skipped, overwritten)
+	log.Print(planLabel(m.dryRun, fmt.Sprintf("tenants inserted=%d skipped=%d overwritten=%d", inserted, skipped, overwritten)))
 	return n, nil
 }
 
