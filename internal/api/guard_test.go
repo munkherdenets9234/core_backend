@@ -326,3 +326,23 @@ func TestByHostRequiresServiceKey(t *testing.T) {
 	assertRefused(t, e, http.MethodGet, path, map[string]string{"Authorization": "Bearer " + signed},
 		http.StatusUnauthorized, apierr.CodeUnauthorized)
 }
+
+// The resolve route returns a tenant's identity for a key, so it is service-key
+// only: no credential and a superadmin bearer must both be refused, and it must
+// not appear in publicRoutes.
+func TestResolveRequiresServiceKey(t *testing.T) {
+	e, maker := testEngine(t)
+	const path = "/api/v1/svc/tenants/resolve"
+
+	if publicRoutes["GET /api/v1/svc/tenants/resolve"] {
+		t.Fatal("resolve must not be a public route")
+	}
+	assertRefused(t, e, http.MethodGet, path, nil, http.StatusUnauthorized, apierr.CodeUnauthorized)
+
+	signed, _, err := maker.Create("user-1", token.RoleSuperadmin, "", time.Hour)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	assertRefused(t, e, http.MethodGet, path, map[string]string{"Authorization": "Bearer " + signed},
+		http.StatusUnauthorized, apierr.CodeUnauthorized)
+}

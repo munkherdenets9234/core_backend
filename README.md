@@ -148,6 +148,11 @@ a live subscription, and a suspended tenant (reported as a status).
 2. Put it in that service's `TENANTCORE_SERVICE_KEY`.
 3. Point its entitlement client at `/api/v1/svc/entitlements`.
 
+A product that keeps no tenants collection of its own can resolve a tenant's
+key to its identity (id, slug, name, status, domain, hosts) with
+`GET /api/v1/svc/tenants/resolve`, sending the key in `X-Tenant-Key`. An unknown
+key is a 401; a suspended tenant resolves with `status: suspended`.
+
 In digitalservice that last step is replacing one implementation of
 `entitlement.Provider` — the interface already exists and every call site is
 written against it, so nothing else changes.

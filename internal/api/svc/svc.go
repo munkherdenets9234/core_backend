@@ -60,6 +60,11 @@ func Register(base *gin.RouterGroup, d Deps) {
 	// unlike a key it is safe to appear in logs.
 	g.GET("/tenants/by-host/:host", c.ByHost)
 
+	// Identity for a key, with no entitlement: how a product that keeps no
+	// tenants collection of its own learns which tenant a key is. The key is a
+	// header for the same reason as /entitlements.
+	g.GET("/tenants/resolve", c.Resolve)
+
 	// Mail, on behalf of a product. Rate limited on top of the service-key
 	// check: the key is a machine credential living in another service's
 	// environment, and a limit is what keeps a leaked one from emptying the
@@ -91,6 +96,20 @@ func (h *entitlementsController) ByHost(c *gin.Context) error {
 		return err
 	}
 	response.OK(c, ent)
+	return nil
+}
+
+func (h *entitlementsController) Resolve(c *gin.Context) error {
+	key := c.GetHeader("X-Tenant-Key")
+	if key == "" {
+		return apierr.BadRequest("missing X-Tenant-Key header").In(apierr.DomainTenant)
+	}
+
+	ident, err := h.ent.ResolveByAPIKey(c.Request.Context(), key)
+	if err != nil {
+		return err
+	}
+	response.OK(c, ident)
 	return nil
 }
 

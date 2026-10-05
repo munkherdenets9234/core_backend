@@ -139,6 +139,49 @@ func (s *EntitlementService) ForAPIKey(ctx context.Context, rawKey string) (enti
 	return s.For(ctx, t.ID)
 }
 
+// TenantIdentity is who a key belongs to, without the entitlement. It is what a
+// product with no tenants collection of its own needs to scope its data: the
+// id to key rows by, the host list to match a visitor against, and the status
+// so it can refuse a suspended tenant itself.
+type TenantIdentity struct {
+	TenantID primitive.ObjectID `json:"tenant_id"`
+	Slug     string             `json:"slug"`
+	Name     string             `json:"name"`
+	Status   string             `json:"status"`
+	Domain   string             `json:"domain"`
+	Hosts    []string           `json:"hosts"`
+}
+
+// ResolveByAPIKey maps a raw tenant API key to the tenant's identity.
+//
+// An unknown key is a 401, a failed authentication. A suspended tenant is not:
+// it resolves and reports its status, matching ForAPIKey, so the caller decides
+// what suspension means. A store failure is an internal error, never a 401, so
+// an outage cannot be mistaken for a revoked key.
+func (s *EntitlementService) ResolveByAPIKey(ctx context.Context, rawKey string) (TenantIdentity, error) {
+	t, err := s.tenants.FindByAPIKeyHash(ctx, apikey.Hash(rawKey))
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return TenantIdentity{}, apierr.Unauthorized("").In(apierr.DomainTenant)
+		}
+		return TenantIdentity{}, apierr.Internal(err)
+	}
+	status := "active"
+	if t.Status == models.TenantSuspended {
+		status = "suspended"
+	}
+	hosts := make([]string, 0, len(t.Hosts))
+	hosts = append(hosts, t.Hosts...)
+	return TenantIdentity{
+		TenantID: t.ID,
+		Slug:     t.Slug,
+		Name:     t.Name,
+		Status:   status,
+		Domain:   t.Domain,
+		Hosts:    hosts,
+	}, nil
+}
+
 // ForHost is the shape a product serving a public site calls: it holds the
 // visitor's hostname and nothing else. One call returns the tenant and its
 // entitlement, so the product does not keep a hostname-to-tenant table of its
