@@ -27,6 +27,8 @@ func Init(env string) {
 		zap.S().Fatalf("failed to init logger: %v", err)
 		os.Exit(1)
 	}
+	// Last step, so nothing logged through Log can carry a secret out.
+	Log = Redact(Log)
 }
 
 func Sync() {
