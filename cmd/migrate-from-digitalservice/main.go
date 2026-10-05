@@ -156,6 +156,22 @@ func (m *migration) upsert(ctx context.Context, col string, id primitive.ObjectI
 	return err
 }
 
+// insertOnly writes doc at its own _id only if no document with that _id
+// exists, using $setOnInsert so the database enforces it atomically. It
+// reports whether a document was inserted. Under dryRun it writes nothing and
+// reports true (the plan).
+func (m *migration) insertOnly(ctx context.Context, col string, id primitive.ObjectID, doc bson.M) (bool, error) {
+	if m.dryRun {
+		return true, nil
+	}
+	delete(doc, "_id")
+	res, err := m.to.Collection(col).UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$setOnInsert": doc}, options.Update().SetUpsert(true))
+	if err != nil {
+		return false, err
+	}
+	return res.UpsertedCount > 0, nil
+}
+
 func (m *migration) each(ctx context.Context, col string, fn func(bson.M, primitive.ObjectID) error) (int, error) {
 	cur, err := m.from.Collection(col).Find(ctx, bson.M{})
 	if err != nil {
@@ -217,20 +233,38 @@ func (m *migration) tenants(ctx context.Context) (int, error) {
 		source = append(source, snap)
 
 		action := decideTenant(existingIDs[id], m.onlyMissing)
-		switch action {
-		case actionSkipExisting:
+		if action == actionSkipExisting {
 			skipped++
 			return nil
-		case actionOverwrite:
-			overwritten++
-		default:
-			inserted++
 		}
 		// `project` is never on the stored document (digitalservice resolves
 		// it on read from tenant_details), but delete defensively: a stray
 		// copy here would become a second source of truth for showcase
 		// content, which is precisely the thing the split removes.
 		delete(doc, "project")
+
+		if writeKind(m.onlyMissing, action) == writeSetOnInsert {
+			// The existence snapshot may be stale by now; $setOnInsert lets
+			// the database refuse to touch a tenant created since. The
+			// driver reports whether it actually inserted, so a tenant that
+			// appeared in the meantime is counted as skipped. Under dryRun
+			// nothing is written and the counts remain a plan.
+			wrote, err := m.insertOnly(ctx, "tenants", id, doc)
+			if err != nil {
+				return err
+			}
+			if wrote {
+				inserted++
+			} else {
+				skipped++
+			}
+			return nil
+		}
+		if action == actionOverwrite {
+			overwritten++
+		} else {
+			inserted++
+		}
 		return m.upsert(ctx, "tenants", id, doc)
 	})
 	if err != nil {

@@ -64,3 +64,19 @@ func TestLast4_ShortAndMissingValues(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestWriteKind_OnlyMissingNeverUsesSet(t *testing.T) {
+	for _, a := range []tenantAction{actionInsert, actionSkipExisting, actionOverwrite} {
+		if got := writeKind(true, a); got != writeSetOnInsert {
+			t.Errorf("onlyMissing action=%v: got %v, want writeSetOnInsert", a, got)
+		}
+	}
+}
+
+func TestWriteKind_DefaultModeUsesSet(t *testing.T) {
+	for _, a := range []tenantAction{actionInsert, actionOverwrite} {
+		if got := writeKind(false, a); got != writeSet {
+			t.Errorf("default action=%v: got %v, want writeSet", a, got)
+		}
+	}
+}

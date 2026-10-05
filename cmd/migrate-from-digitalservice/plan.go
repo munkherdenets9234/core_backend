@@ -84,3 +84,25 @@ func last4(v any) string {
 	}
 	return s[len(s)-4:]
 }
+
+// writeMode is how a tenant document is written to the target.
+type writeMode int
+
+const (
+	// writeSet is the default upsert with $set, which overwrites.
+	writeSet writeMode = iota
+	// writeSetOnInsert is an upsert with $setOnInsert: the database itself
+	// refuses to change a document that already exists.
+	writeSetOnInsert
+)
+
+// writeKind pins the rule that -only-missing never writes with $set. The
+// existence snapshot can go stale during a long run, so under -only-missing
+// even a document decided as an insert is written in a form that cannot
+// overwrite anything.
+func writeKind(onlyMissing bool, _ tenantAction) writeMode {
+	if onlyMissing {
+		return writeSetOnInsert
+	}
+	return writeSet
+}
