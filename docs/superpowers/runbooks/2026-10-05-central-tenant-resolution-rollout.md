@@ -17,7 +17,7 @@ This file contains no secrets and must never gain any. Placeholders such as
   commits or logs.
 - Never run the migration without `-dry-run` first.
 - Never run the migration against the live tenantcore database without
-  `-only-missing`.
+  `-only-missing`, and prefer `-collections tenants` (step 2).
 - No assistant or automation performs any step marked **REQUIRES THE OWNER'S
   EXPLICIT APPROVAL AT THE TIME**. The owner runs it, or approves that single
   action in the moment. Earlier approval does not carry over.
@@ -65,22 +65,47 @@ go run ./cmd/migrate-from-digitalservice \
   -only-missing -dry-run
 ```
 
+`-collections` takes a comma list of `tenants,platform_users,plans,subscriptions`
+(default all four; an unknown name stops the tool at startup). The default
+recommendation for the real run (step 3) is `-collections tenants`: with all
+four, `-only-missing` also inserts every platform user, plan and subscription
+that is absent from tenantcore, which resurrects users deleted there on purpose
+(with their old password hashes) and plans or subscriptions removed or changed
+since. Dry-run the same collection set you intend to run for real. Run the dry
+run once with the default (all four) as well if you want to see what that
+would add.
+
 (`-from`/`-to` default to `DIGITALSERVICE_MONGO_URI` / `MONGO_URI`.) The tool
-prints the source and destination URIs in its first log line; do not paste
-that output anywhere unredacted.
+logs the source and destination as scheme, host and database only; user info
+and options are removed. Still do not paste its output anywhere unneeded.
 
 Read:
-- per collection `would:` summary lines (inserted and skipped counts) for
-  tenants, platform_users, plans, subscriptions;
-- the tenants key-mismatch report: id, name and the last four characters of
-  each side's hash. These are the tenants needing re-issue (step 4).
+- per collection `would:` summary lines (inserted and skipped counts);
+- one `would insert <collection> id=<_id>` line per document that would be
+  inserted, with a safe label: tenants show name and slug, plans the slug,
+  subscriptions the tenant id, platform_users the `_id` only. Use them to spot
+  an `_id` difference: a tenant that already exists in tenantcore under
+  another `_id` shows up as would-insert with the same slug;
+- the tenants drift report, for tenants present in BOTH databases: for each
+  one that differs, id, name and every differing facet: `key` (the
+  `api_key_last4` field of each side), `domain` and `status` (both values).
+  Equal tenants and tenants on only one side are not listed. No hash is ever
+  printed. Key drift marks the tenants needing re-issue (step 4).
 
-Success: the run ends with `dry run complete`, and the counts match what you
-expect (tenants absent from tenantcore, today Inno Nomads and Nomad Trails,
-are the ones that would be inserted).
+Success: the run ends with `dry run complete`, and the would-insert lines
+match what you expect (tenants absent from tenantcore, today Inno Nomads and
+Nomad Trails, are the ones that would be inserted).
 
-STOP if any tenant's `_id` differs between the two databases: its data would
-be orphaned. Resolve by hand with the owner before going on.
+STOP, resolve by hand with the owner, and rerun the dry run before going on, if:
+- any would-insert tenant has a slug that already exists in tenantcore under
+  another `_id` (the two databases disagree about who the tenant is; its data
+  would be orphaned);
+- any would-insert row appears in platform_users, plans or subscriptions and
+  the owner has not explicitly said they want it (otherwise run step 3 with
+  `-collections tenants` only);
+- any domain or status drift is listed that has not been resolved first (decide
+  which side is right and fix it in tenantcore's console; the migration does
+  not overwrite existing tenants under `-only-missing`).
 
 ## Step 3. Insert missing tenants (writes to the shared database)
 
@@ -93,10 +118,11 @@ The same command without `-dry-run`, keeping `-only-missing`:
 go run ./cmd/migrate-from-digitalservice \
   -from "$MONGO_URI_SOURCE" -from-db "$MONGO_DB_SOURCE" \
   -to   "$MONGO_URI_TARGET" -to-db   "$MONGO_DB_TARGET" \
-  -only-missing
+  -only-missing -collections tenants
 ```
 
-Inserts use `$setOnInsert`: documents already in tenantcore are never
+(Add other collections only if the owner explicitly asked for them after
+reading the step 2 would-insert lines.) Inserts use `$setOnInsert`: documents already in tenantcore are never
 touched. Tenants newly inserted keep their existing keys; no re-issue, no env
 change.
 
@@ -107,11 +133,11 @@ Rerunning is safe (insert-only).
 
 ## Step 4. Re-issue mismatched tenants, one at a time
 
-Applies to the tenants listed by the mismatch report (E&S expected). Their
-old key stops working in tenantcore-resolved mode at the moment of rotation,
-and E&S's subscription ends 2026-10-20: do not do this in the last days of
-that period, and finish the flip well before it. Re-read the rollback caveat
-above first.
+Applies to the tenants with key drift in the step 2 report (E&S expected).
+Their old key stops working in tenantcore-resolved mode at the moment of
+rotation, and E&S's subscription ends 2026-10-20: do not do this in the last
+days of that period, and finish the flip well before it. Re-read the rollback
+caveat above first. Do step 4b (TRUSTED_PROXIES) before the flip too.
 
 **REQUIRES THE OWNER'S EXPLICIT APPROVAL AT THE TIME, per tenant. The
 assistant or automation must not rotate a key or edit production env files.**
@@ -119,23 +145,47 @@ assistant or automation must not rotate a key or edit production env files.**
 Order for each tenant, finishing one before starting the next:
 
 1. Rotate the key in tenantcore (console, tenant Details page). The new key
-   is shown once; copy it straight into step 2 and nowhere else.
+   is shown once; copy it once, straight into the next item, and nowhere else.
 2. Set `TENANT_API_KEY` in that tenant's site env file and its admin env file
-   (hosting dashboard, not a file in git), and redeploy both.
-3. Verify the public translations read (or any public read through the
-   site) returns 200 for that tenant.
-4. Only then move to the next tenant.
+   (hosting dashboard, not a file in git).
+3. Redeploy both.
+4. FLIP (step 5). The flip is one switch for all tenants; with several
+   re-issued tenants, do items 1 to 3 for each of them, then flip once.
+5. THEN verify: a public read through the tenant's site (for example the
+   translations read) returns 200, and admin sign-in works.
 
-Outage window to plan for: while digitalservice is still in `local` mode it
-does not know the new key (its local hash is the old one), and after the flip
-it does not know the old key (tenantcore holds a different hash). Either way
-a re-issued tenant's storefront is refused from the moment its key is rotated
-until its env is updated AND the flip is done. Keep that gap to minutes: have
-the env change ready, and do the rotation, redeploy and step 5 in one sitting
-for the mismatched tenants. Tenants that were not mismatched are unaffected.
+Do not try to verify before the flip. In `local` mode digitalservice still
+holds the OLD hash, so the new key is refused there; a refusal before the flip
+is expected and proves nothing. The mismatch line for the tenant also cannot
+be used as a success criterion: digitalservice's local hash stays old forever
+and the drift report will keep listing the key difference.
 
-Success per tenant: public read 200, admin sign-in works, and the tenant's
-mismatch line no longer appears on a fresh step-2 dry run.
+Unavoidable refusal window: from the moment the key is rotated until its env
+is updated, redeployed AND the flip is done, that tenant's storefront is
+refused. In `local` mode digitalservice does not know the new key; after the
+flip it does not know the old key. Keep that window to minutes: have the env
+change ready and do rotation, env update, redeploy and the flip in one sitting.
+Tenants whose keys were not re-issued are unaffected.
+
+Success per tenant (after the flip): public read 200 and admin sign-in works.
+
+## Step 4b. Before the flip: TRUSTED_PROXIES
+
+digitalservice has a per-IP limiter in front of key resolution. It needs to
+know which peers are your reverse proxy, otherwise it trusts a client-supplied
+`X-Forwarded-For` header and the limiter can be bypassed with one header.
+
+Set `TRUSTED_PROXIES` on production digitalservice to a comma-separated list
+of the IPs or CIDR ranges of the reverse proxy in front of digitalservice.
+Read the ranges from the hosting provider's documented proxy ranges; do not
+guess them. Redeploy, then:
+
+```
+curl -fsS "$DIGITALSERVICE_URL/readyz"
+```
+
+Success: 200, and the `/readyz` detail no longer carries the warning about
+`TRUSTED_PROXIES` being unset. If the warning is still there, do not flip.
 
 ## Step 5. Flip
 
@@ -160,17 +210,25 @@ Success: 200; `features` contains `tenant_resolver_tenantcore` with
 appears only while tenantcore is unreachable). Then, per tenant: one public
 storefront request returns 200 with that tenant's key (set in your shell, not
 pasted anywhere), and one admin sign-in succeeds. Watch error rates (401, 403,
-503) for a stable period, for example 24 hours, before calling it done.
+429, 503) for a stable period, for example 24 hours, before calling it done.
 Expected failures to look for: 401 for a tenant whose key was re-issued but
 whose env was not updated; 503 only if tenantcore is down and the key was
-never cached.
+never cached; 429 means the per-IP limiter is refusing a client (check
+`TRUSTED_PROXIES` and the two limiter numbers before raising them).
 
 ## Step 6. Rollback
 
 Set `TENANT_RESOLVER=local` (or unset it) on digitalservice and redeploy.
 
+Simplest path for a re-issued tenant: put its OLD key back in that tenant's
+site and admin env files and redeploy. In `local` mode digitalservice still
+holds the old hash, so the old key works again with no digitalservice-side
+rotate. Note that this also re-enables a possibly leaked old key; if the
+re-issue was done because the key leaked, use the rotate path below instead.
+
 Works as-is for every tenant that was NOT re-issued. For a re-issued tenant
-it does not (see the rollback caveat): its local hash is stale. Recover it
+it does not, unless you restore the old key as above (see the rollback
+caveat): its local hash is the old one. Otherwise recover it
 with a digitalservice-side key rotate via digitalservice's own rotate route
 (owner approval, same care as step 4), then update that tenant's env files
 and redeploy. Success: that tenant's public read returns 200 in `local` mode.
@@ -189,7 +247,8 @@ and redeploy. Success: that tenant's public read returns 200 in `local` mode.
 - tenantcore on Render can cold start: the first call after idle can be slow
   (the client times out at 3 s and falls back to cache or 503). Warm it with
   the step 1 `curl` before the flip.
-- Per-IP limiter in front of resolution only in `tenantcore` mode.
+- Per-IP limiter in front of resolution only in `tenantcore` mode. Without
+  `TRUSTED_PROXIES` it trusts a client-supplied `X-Forwarded-For` (step 4b).
 - Phase 3, removing digitalservice's duplicate management routes and the
   local lookup, is a separate plan.
 
