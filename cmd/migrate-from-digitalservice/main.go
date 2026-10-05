@@ -30,6 +30,16 @@
 // Rerunning is safe: every write is an upsert keyed by _id, and a second run
 // over unchanged data is a no-op. It does not delete anything on either side.
 //
+// By default a tenant that already exists in tenantcore is OVERWRITTEN with
+// the source copy, api_key_hash included. Pass -only-missing to make the
+// tenants step insert-only: tenants already in the target are never written
+// (with or without -dry-run), so a key rotated in tenantcore survives. Every
+// run, dry or not, prints the tenants whose api_key_hash differs between the
+// two databases (id, name and the last four characters of each side; never a
+// hash) and the counts of tenants inserted, skipped and overwritten.
+// -dry-run writes nothing at all. The other steps are unaffected by
+// -only-missing.
+//
 // Usage:
 //
 //	go run ./cmd/migrate-from-digitalservice \
@@ -58,12 +68,13 @@ import (
 
 func main() {
 	var (
-		fromURI = flag.String("from", envOr("DIGITALSERVICE_MONGO_URI", "mongodb://localhost:27017"), "source MongoDB URI (digitalservice)")
-		fromDB  = flag.String("from-db", envOr("DIGITALSERVICE_MONGO_DB", "digitalservice"), "source database name")
-		toURI   = flag.String("to", envOr("MONGO_URI", "mongodb://localhost:27017"), "destination MongoDB URI (tenantcore)")
-		toDB    = flag.String("to-db", envOr("MONGO_DB", "tenantcore"), "destination database name")
-		dryRun  = flag.Bool("dry-run", false, "report what would be written and change nothing")
-		timeout = flag.Duration("timeout", 5*time.Minute, "overall timeout")
+		fromURI     = flag.String("from", envOr("DIGITALSERVICE_MONGO_URI", "mongodb://localhost:27017"), "source MongoDB URI (digitalservice)")
+		fromDB      = flag.String("from-db", envOr("DIGITALSERVICE_MONGO_DB", "digitalservice"), "source database name")
+		toURI       = flag.String("to", envOr("MONGO_URI", "mongodb://localhost:27017"), "destination MongoDB URI (tenantcore)")
+		toDB        = flag.String("to-db", envOr("MONGO_DB", "tenantcore"), "destination database name")
+		dryRun      = flag.Bool("dry-run", false, "report what would be written and change nothing")
+		onlyMissing = flag.Bool("only-missing", false, "tenants step inserts absent tenants only and never writes one that already exists (default overwrites)")
+		timeout     = flag.Duration("timeout", 5*time.Minute, "overall timeout")
 	)
 	flag.Parse()
 
@@ -87,9 +98,10 @@ func main() {
 	defer func() { _ = dst.Disconnect(context.Background()) }()
 
 	m := &migration{
-		from:   src.Database(*fromDB),
-		to:     dst.Database(*toDB),
-		dryRun: *dryRun,
+		from:        src.Database(*fromDB),
+		to:          dst.Database(*toDB),
+		dryRun:      *dryRun,
+		onlyMissing: *onlyMissing,
 	}
 
 	if *dryRun {
@@ -126,9 +138,10 @@ func main() {
 }
 
 type migration struct {
-	from   *mongo.Database
-	to     *mongo.Database
-	dryRun bool
+	from        *mongo.Database
+	to          *mongo.Database
+	dryRun      bool
+	onlyMissing bool
 }
 
 // upsert writes doc at its own _id. Upsert rather than insert so a rerun
@@ -178,8 +191,41 @@ func (m *migration) each(ctx context.Context, col string, fn func(bson.M, primit
 // api_key_hash comes along, which is the point: every product service already
 // holding a tenant's key keeps working, and no key has to be rotated on
 // cutover day.
+//
+// With onlyMissing set, a tenant already in the target is never written, dry
+// run or not; the step only inserts the ones that are absent. Either way it
+// prints the tenants whose api_key_hash differs between the two sides (id,
+// name and last four of each, never a hash) and the insert/skip/overwrite
+// counts. Under dryRun upsert writes nothing, so those counts are a plan.
 func (m *migration) tenants(ctx context.Context) (int, error) {
-	return m.each(ctx, "tenants", func(doc bson.M, id primitive.ObjectID) error {
+	existing, err := m.targetTenants(ctx)
+	if err != nil {
+		return 0, err
+	}
+	existingIDs := make(map[primitive.ObjectID]bool, len(existing))
+	for _, doc := range existing {
+		if id, ok := doc["_id"].(primitive.ObjectID); ok {
+			existingIDs[id] = true
+		}
+	}
+
+	var source []bson.M
+	var inserted, skipped, overwritten int
+	n, err := m.each(ctx, "tenants", func(doc bson.M, id primitive.ObjectID) error {
+		// Snapshot for the mismatch report before upsert strips the _id.
+		snap := bson.M{"_id": id, "name": doc["name"], "api_key_hash": doc["api_key_hash"]}
+		source = append(source, snap)
+
+		action := decideTenant(existingIDs[id], m.onlyMissing)
+		switch action {
+		case actionSkipExisting:
+			skipped++
+			return nil
+		case actionOverwrite:
+			overwritten++
+		default:
+			inserted++
+		}
 		// `project` is never on the stored document (digitalservice resolves
 		// it on read from tenant_details), but delete defensively: a stray
 		// copy here would become a second source of truth for showcase
@@ -187,6 +233,33 @@ func (m *migration) tenants(ctx context.Context) (int, error) {
 		delete(doc, "project")
 		return m.upsert(ctx, "tenants", id, doc)
 	})
+	if err != nil {
+		return n, err
+	}
+
+	mismatches := keyMismatches(source, existing)
+	log.Printf("tenants api_key_hash mismatches: %d", len(mismatches))
+	for _, mm := range mismatches {
+		log.Printf("  mismatch id=%s name=%q source=...%s target=...%s", mm.ID.Hex(), mm.Name, mm.SourceLast4, mm.TargetLast4)
+	}
+	log.Printf("tenants inserted=%d skipped=%d overwritten=%d", inserted, skipped, overwritten)
+	return n, nil
+}
+
+// targetTenants reads the tenants already in the destination, projecting only
+// the fields the mismatch report and the existence check need.
+func (m *migration) targetTenants(ctx context.Context) ([]bson.M, error) {
+	cur, err := m.to.Collection("tenants").Find(ctx, bson.M{},
+		options.Find().SetProjection(bson.M{"name": 1, "api_key_hash": 1}))
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	var docs []bson.M
+	if err := cur.All(ctx, &docs); err != nil {
+		return nil, err
+	}
+	return docs, nil
 }
 
 // platformUsers copies the operator's staff, password hashes included, so
