@@ -265,3 +265,45 @@ func TestSubjectValuesCannotInjectLineBreaks(t *testing.T) {
 		}
 	}
 }
+
+// Development-only Gmail transport: username and app password select it, the
+// pasted spaces are dropped, and the sender defaults to the login.
+func TestGmailTransportConfig(t *testing.T) {
+	m := New(Config{Username: "me@gmail.com", Password: "abcd efgh ijkl mnop"})
+	if m == nil {
+		t.Fatal("expected a mailer")
+	}
+	if m.cfg.Password != "abcdefghijklmnop" || m.cfg.FromAddress != "me@gmail.com" || m.cfg.Host != DefaultSMTPHost || m.cfg.Port != DefaultSMTPPort {
+		t.Fatalf("cfg = %+v", m.cfg)
+	}
+	if m.From() != "me@gmail.com" {
+		t.Fatalf("From() = %q", m.From())
+	}
+}
+
+// With an API key set, Brevo wins even if Gmail credentials are also present.
+func TestBrevoWinsOverGmail(t *testing.T) {
+	m := New(Config{APIKey: "k", FromAddress: "a@example.com", Username: "me@gmail.com", Password: "x"})
+	if m == nil || m.cfg.APIKey == "" || m.cfg.FromAddress != "a@example.com" {
+		t.Fatalf("m = %+v", m)
+	}
+}
+
+// Hand-written SMTP headers must not be able to start a new header line.
+func TestSMTPHeadersCannotCarryLineBreaks(t *testing.T) {
+	msg := string(buildMessage("Evil\r\nBcc: v@example.com", "me@gmail.com", "you@example.com\r\nBcc: v@example.com", "Hi\nX-Injected: 1", "body"))
+	headers, _, found := strings.Cut(msg, "\r\n\r\n")
+	if !found {
+		t.Fatalf("no header/body separator in:\n%s", msg)
+	}
+	for _, line := range strings.Split(headers, "\r\n") {
+		name, _, ok := strings.Cut(line, ":")
+		if !ok {
+			t.Fatalf("malformed header line %q", line)
+		}
+		switch strings.TrimSpace(name) {
+		case "Bcc", "X-Injected":
+			t.Fatalf("injected text became its own header line: %q", line)
+		}
+	}
+}

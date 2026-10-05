@@ -202,3 +202,25 @@ func TestExpiryNoticeNeedsMailAndAddress(t *testing.T) {
 		})
 	}
 }
+
+// Gmail is a development convenience. In production it must never apply, even
+// when the variables happen to be set.
+func TestGmailFallbackIsDevelopmentOnly(t *testing.T) {
+	for _, tc := range []struct {
+		env  Env
+		want bool
+	}{
+		{EnvDevelopment, true},
+		{EnvProduction, false},
+	} {
+		c := valid()
+		c.AppEnv = tc.env
+		c.GmailEmail, c.GmailPassword = "me@gmail.com", "app-password"
+		if got := c.GmailEnabled(); got != tc.want {
+			t.Fatalf("%s: GmailEnabled() = %v, want %v", tc.env, got, tc.want)
+		}
+		if got := c.EmailEnabled(); got != tc.want {
+			t.Fatalf("%s: EmailEnabled() = %v, want %v", tc.env, got, tc.want)
+		}
+	}
+}

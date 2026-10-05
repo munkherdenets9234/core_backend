@@ -10,6 +10,9 @@
 // SMTP ports and a connection that times out on :587 tells you nothing about
 // the credentials. Port 443 is never blocked.
 //
+// A Gmail SMTP transport exists for local development only (smtp.go); the
+// caller chooses it by passing Username/Password instead of APIKey.
+//
 // It is deliberately small and template-driven. See Send: the caller names a
 // template and supplies data, never a subject and body. That is what stops a
 // leaked service key from turning this into a spam relay.
@@ -38,6 +41,13 @@ type Config struct {
 	// caller choosing From would make mail that says anything.
 	FromAddress string
 	FromName    string
+	// Username/Password select the SMTP transport (Gmail, development only)
+	// when APIKey is empty. Password is a Google App Password. FromAddress
+	// defaults to Username, because Gmail rewrites a From it does not own.
+	Host     string
+	Port     int
+	Username string
+	Password string
 	// Endpoint overrides DefaultEndpoint; tests point it at a local server.
 	Endpoint string
 	Timeout  time.Duration
@@ -50,7 +60,8 @@ type Mailer struct {
 	client *http.Client
 }
 
-// New returns nil when no API key or no sender address is configured.
+// New returns nil when neither transport is configured: an API key with a
+// sender address (Brevo), or a username with a password (Gmail SMTP).
 //
 // Same rule as every other optional dependency: the process starts, says what
 // is missing at startup and on /readyz, and the routes that need it answer
@@ -61,7 +72,23 @@ func New(cfg Config) *Mailer {
 	// A pasted key can carry stray whitespace; it is never part of the secret.
 	cfg.APIKey = strings.Join(strings.Fields(cfg.APIKey), "")
 	cfg.FromAddress = strings.TrimSpace(cfg.FromAddress)
-	if cfg.APIKey == "" || cfg.FromAddress == "" {
+	if cfg.APIKey == "" {
+		// Google shows app passwords as "abcd efgh ijkl mnop"; the spaces are
+		// display formatting, not part of the secret.
+		cfg.Password = strings.ReplaceAll(cfg.Password, " ", "")
+		if cfg.Username == "" || cfg.Password == "" {
+			return nil
+		}
+		if cfg.FromAddress == "" {
+			cfg.FromAddress = cfg.Username
+		}
+		if cfg.Host == "" {
+			cfg.Host = DefaultSMTPHost
+		}
+		if cfg.Port == 0 {
+			cfg.Port = DefaultSMTPPort
+		}
+	} else if cfg.FromAddress == "" {
 		return nil
 	}
 	if cfg.Endpoint == "" {
@@ -113,7 +140,11 @@ func (m *Mailer) Send(to string, tmpl Template, data map[string]string) error {
 		return err
 	}
 
-	return m.deliver(buildPayload(m.cfg.FromName, m.cfg.FromAddress, to, subject, body))
+	p := buildPayload(m.cfg.FromName, m.cfg.FromAddress, to, subject, body)
+	if m.cfg.APIKey == "" {
+		return m.deliverSMTP(to, p)
+	}
+	return m.deliver(p)
 }
 
 // payload is the JSON Brevo's /v3/smtp/email accepts.

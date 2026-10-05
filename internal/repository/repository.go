@@ -26,6 +26,12 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	// Before creating anything: an index left by an earlier build under a
+	// name now reused with different options would make CreateOne fail.
+	if err := dropLegacyIndexes(ctx, mongoIndexes{db.Collection("tenants").Indexes()}); err != nil {
+		return err
+	}
+
 	for _, s := range indexSpecs() {
 		if _, err := db.Collection(s.collection).Indexes().CreateOne(ctx, s.model); err != nil {
 			return err
@@ -52,12 +58,70 @@ type indexSpec struct {
 // $exists (not $type) so an equality query on site_hosts is provably covered
 // by the index. UNVERIFIED against a live MongoDB: no explain() has been run
 // yet to confirm FindByHost uses this index rather than scanning.
+//
+// The index has an explicit name, siteHostsIndexName. Commit 280d276 created
+// it under the driver's default name (site_hosts_1) with a $type: "string"
+// filter; recreating that name with the $exists filter is an
+// IndexOptionsConflict and EnsureIndexes would fail at boot on any database
+// that ran 280d276. dropLegacyIndexes removes the old one first.
 func siteHostsIndex() mongo.IndexModel {
 	return mongo.IndexModel{
 		Keys: bson.D{{Key: "site_hosts", Value: 1}},
-		Options: options.Index().SetUnique(true).SetPartialFilterExpression(
+		Options: options.Index().SetName(siteHostsIndexName).SetUnique(true).SetPartialFilterExpression(
 			bson.M{"site_hosts": bson.M{"$exists": true}}),
 	}
+}
+
+const (
+	siteHostsIndexName       = "site_hosts_unique_exists"
+	legacySiteHostsIndexName = "site_hosts_1"
+)
+
+// indexOps is the slice of a collection's index view dropLegacyIndexes
+// needs, narrow so the migration can be tested without MongoDB.
+type indexOps interface {
+	Names(ctx context.Context) ([]string, error)
+	Drop(ctx context.Context, name string) error
+}
+
+// dropLegacyIndexes drops the tenants index 280d276 created as site_hosts_1,
+// if it is there. Only that name, and only when listed, so it is a no-op on
+// every boot after the first and on a fresh database.
+//
+// Between the drop and the CreateOne that follows it, site_hosts is briefly
+// not unique. Acceptable at boot: the service is not serving yet, and the
+// create fails loudly if duplicates slipped in.
+func dropLegacyIndexes(ctx context.Context, ix indexOps) error {
+	names, err := ix.Names(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range names {
+		if n == legacySiteHostsIndexName {
+			return ix.Drop(ctx, n)
+		}
+	}
+	return nil
+}
+
+// mongoIndexes adapts a driver IndexView to indexOps.
+type mongoIndexes struct{ v mongo.IndexView }
+
+func (m mongoIndexes) Names(ctx context.Context) ([]string, error) {
+	specs, err := m.v.ListSpecifications(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(specs))
+	for _, s := range specs {
+		out = append(out, s.Name)
+	}
+	return out, nil
+}
+
+func (m mongoIndexes) Drop(ctx context.Context, name string) error {
+	_, err := m.v.DropOne(ctx, name)
+	return err
 }
 
 func indexSpecs() []indexSpec {

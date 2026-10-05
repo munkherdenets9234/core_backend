@@ -277,16 +277,27 @@ func startExpiryNotice(
 // broken" are the same sentence.
 func buildMailer(cfg *config.Config, log *zap.Logger) *mailer.Mailer {
 	if !cfg.EmailEnabled() {
-		log.Warn("email is off — BREVO_API_KEY/MAIL_FROM_EMAIL are not both set; " +
+		log.Warn("email is off — BREVO_API_KEY/MAIL_FROM_EMAIL are not both set (nor GMAIL_* in development); " +
 			"POST /svc/notifications/email answers 503 and no password-reset mail is delivered")
 		return nil
 	}
+	// Brevo wins whenever it is configured. Gmail is only reachable in
+	// development (EmailEnabled already enforced that).
+	if cfg.BrevoEnabled() {
+		m := mailer.New(mailer.Config{
+			APIKey:      cfg.BrevoAPIKey,
+			FromAddress: cfg.MailFromEmail,
+			FromName:    cfg.MailFromName,
+		})
+		log.Info("email ready", zap.String("transport", "brevo-https"), zap.String("from", m.From()))
+		return m
+	}
 	m := mailer.New(mailer.Config{
-		APIKey:      cfg.BrevoAPIKey,
-		FromAddress: cfg.MailFromEmail,
-		FromName:    cfg.MailFromName,
+		Username: cfg.GmailEmail,
+		Password: cfg.GmailPassword,
+		FromName: cfg.MailFromName,
 	})
-	log.Info("email ready", zap.String("from", m.From()))
+	log.Warn("email ready via Gmail SMTP — development only", zap.String("from", m.From()))
 	return m
 }
 
