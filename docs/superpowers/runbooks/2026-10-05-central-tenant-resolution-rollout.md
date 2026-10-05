@@ -178,14 +178,18 @@ know which peers are your reverse proxy, otherwise it trusts a client-supplied
 Set `TRUSTED_PROXIES` on production digitalservice to a comma-separated list
 of the IPs or CIDR ranges of the reverse proxy in front of digitalservice.
 Read the ranges from the hosting provider's documented proxy ranges; do not
-guess them. Redeploy, then:
+guess them. Record the value you set (it is not a secret) so the owner can
+check it. Redeploy.
 
-```
-curl -fsS "$DIGITALSERVICE_URL/readyz"
-```
+Success before the flip: digitalservice restarts cleanly with `TRUSTED_PROXIES`
+set. An invalid entry stops startup with an error naming `TRUSTED_PROXIES` and
+the bad entry; fix it and redeploy.
 
-Success: 200, and the `/readyz` detail no longer carries the warning about
-`TRUSTED_PROXIES` being unset. If the warning is still there, do not flip.
+Do not use `/readyz` to check this before the flip. The `tenant_resolver`
+block and its `proxy_safe: false` detail exist only while
+`TENANT_RESOLVER=tenantcore`; in `local` mode `/readyz` never shows them, so
+it cannot confirm or refute the setting. The `/readyz` check is in step 5,
+after the flip.
 
 ## Step 5. Flip
 
@@ -206,8 +210,19 @@ curl -fsS "$DIGITALSERVICE_URL/readyz"
 ```
 
 Success: 200; `features` contains `tenant_resolver_tenantcore` with
-`enabled: true`; `degraded` is false; there is no `tenant_resolver` block (it
-appears only while tenantcore is unreachable). Then, per tenant: one public
+`enabled: true`; `degraded` is false. The `tenant_resolver` block depends on
+state:
+- `TRUSTED_PROXIES` set and tenantcore reachable: no `tenant_resolver` block.
+- `TRUSTED_PROXIES` unset: a `tenant_resolver` block with `proxy_safe: false`
+  and a detail saying the per-IP limiter trusts a client-supplied
+  `X-Forwarded-For`. Status stays 200 and `degraded` is not changed by this;
+  set `TRUSTED_PROXIES` (step 4b) and redeploy.
+- tenantcore unreachable: `degraded` is true and the `tenant_resolver` block
+  has `stale: true`, a detail naming tenantcore as unreachable (resolving from
+  cache, unseen keys answer 503) and a `since` time. If `TRUSTED_PROXIES` is
+  also unset the detail carries both notes and `proxy_safe: false`.
+
+Then, per tenant: one public
 storefront request returns 200 with that tenant's key (set in your shell, not
 pasted anywhere), and one admin sign-in succeeds. Watch error rates (401, 403,
 429, 503) for a stable period, for example 24 hours, before calling it done.
