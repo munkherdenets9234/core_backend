@@ -14,13 +14,14 @@ its service to tenants by API key and does **not** manage tenants. A product
 authenticates itself with a service key and asks tenantcore who a tenant's
 key belongs to. Full statement in `README.md` ("The platform principle").
 
-Current gap, as of 2026-10-05: digitalservice still keeps its own `tenants`
-collection and checks `X-API-Key` against it, so a key rotated or created in
-tenantcore does not change what digitalservice accepts. The agreed fix (cache
-with a 24 h stale window; tenantcore wins and keys are re-issued) is in
-`docs/superpowers/specs/2026-10-05-central-tenant-resolution-design.md`. Until
-that ships, rotating a key on the tenantcore Details page does NOT rotate the
-key a storefront actually uses.
+Central tenant resolution, as of 2026-10-05: the code is done and committed in
+both repos (design:
+`docs/superpowers/specs/2026-10-05-central-tenant-resolution-design.md`), but
+the rollout has not started and digitalservice's `TENANT_RESOLVER` still
+defaults to `local`. Until the flip, digitalservice checks `X-API-Key` against
+its own `tenants` collection, so rotating a key on the tenantcore Details page
+does NOT rotate the key a storefront actually uses. Follow
+`docs/superpowers/runbooks/2026-10-05-central-tenant-resolution-rollout.md`.
 
 ## Running it locally
 
