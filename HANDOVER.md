@@ -6,6 +6,22 @@ first for the architecture, the three audiences, the token model and the
 entitlement document. This page is about running it, wiring it, and what is
 still missing.
 
+## The principle (read before wiring anything)
+
+Tenantcore owns all tenant information and tenant management: identity, API
+key, status, domain/hosts, plan, subscription. Every product service provides
+its service to tenants by API key and does **not** manage tenants. A product
+authenticates itself with a service key and asks tenantcore who a tenant's
+key belongs to. Full statement in `README.md` ("The platform principle").
+
+Current gap, as of 2026-10-05: digitalservice still keeps its own `tenants`
+collection and checks `X-API-Key` against it, so a key rotated or created in
+tenantcore does not change what digitalservice accepts. The agreed fix (cache
+with a 24 h stale window; tenantcore wins and keys are re-issued) is in
+`docs/superpowers/specs/2026-10-05-central-tenant-resolution-design.md`. Until
+that ships, rotating a key on the tenantcore Details page does NOT rotate the
+key a storefront actually uses.
+
 ## Running it locally
 
 1. Copy `.env.example` to `.env` and fill in the required block. The two that
