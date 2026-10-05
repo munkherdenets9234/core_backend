@@ -39,9 +39,13 @@
 // tenantcore survives. Writes use $setOnInsert, so the database enforces it
 // even if the target changes during the run. Each step reports inserted and
 // skipped counts per collection. The tenants step also prints, on every run,
-// the tenants whose api_key_hash differs between the two databases (id, name
-// and the last four characters of each side; never a hash); that report is
-// tenants-only. -dry-run writes nothing at all.
+// the tenants whose key, domain or status differs between the two databases
+// (id, name, the api_key_last4 field of each side, and both domain/status
+// values; never a hash); that report is tenants-only. -dry-run writes nothing
+// at all and prints one line per document it would insert (collection, _id and
+// a safe label: no hashes, emails or URIs). -collections limits the run to a
+// comma list of the four collections (default all). Connection URIs are logged
+// with credentials and options removed.
 //
 // Usage:
 //
@@ -77,9 +81,15 @@ func main() {
 		toDB        = flag.String("to-db", envOr("MONGO_DB", "tenantcore"), "destination database name")
 		dryRun      = flag.Bool("dry-run", false, "report what would be written and change nothing")
 		onlyMissing = flag.Bool("only-missing", false, "insert-only for tenants, platform_users, plans and subscriptions: never write a document that already exists (default overwrites)")
+		collections = flag.String("collections", "", "comma list of collections to migrate: tenants,platform_users,plans,subscriptions (default all four)")
 		timeout     = flag.Duration("timeout", 5*time.Minute, "overall timeout")
 	)
 	flag.Parse()
+
+	wanted, err := parseCollections(*collections)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	if *fromURI == *toURI && *fromDB == *toDB {
 		log.Fatal("source and destination are the same database; refusing to run")
@@ -110,7 +120,7 @@ func main() {
 	if *dryRun {
 		log.Printf("DRY RUN — nothing will be written")
 	}
-	log.Printf("%s/%s → %s/%s", *fromURI, *fromDB, *toURI, *toDB)
+	log.Printf("%s/%s → %s/%s", redactURI(*fromURI), *fromDB, redactURI(*toURI), *toDB)
 
 	// Order matters only for readability; every step is independent because
 	// ids are preserved rather than remapped. Plans before subscriptions so a
@@ -125,7 +135,14 @@ func main() {
 		{"subscriptions", m.subscriptions},
 	}
 
+	want := map[string]bool{}
+	for _, c := range wanted {
+		want[c] = true
+	}
 	for _, step := range steps {
+		if !want[step.name] {
+			continue
+		}
 		n, err := step.run(ctx)
 		if err != nil {
 			log.Fatalf("%s: %v", step.name, err)
@@ -210,6 +227,7 @@ func (m *migration) put(ctx context.Context, col string, id primitive.ObjectID, 
 		}
 		if wouldInsert(ids, id) {
 			m.inserted[col]++
+			log.Print(wouldInsertLine(col, id, doc))
 		} else {
 			m.skipped[col]++
 		}
@@ -293,8 +311,8 @@ func (m *migration) each(ctx context.Context, col string, fn func(bson.M, primit
 //
 // With onlyMissing set, a tenant already in the target is never written, dry
 // run or not; the step only inserts the ones that are absent. Either way it
-// prints the tenants whose api_key_hash differs between the two sides (id,
-// name and last four of each, never a hash) and the insert/skip/overwrite
+// prints the tenants whose key, domain or status differs between the two sides (id,
+// name, api_key_last4 of each and both domain/status values, never a hash) and the insert/skip/overwrite
 // counts. Under dryRun upsert writes nothing, so those counts are a plan.
 func (m *migration) tenants(ctx context.Context) (int, error) {
 	existing, err := m.targetTenants(ctx)
@@ -312,10 +330,14 @@ func (m *migration) tenants(ctx context.Context) (int, error) {
 	var inserted, skipped, overwritten int
 	n, err := m.each(ctx, "tenants", func(doc bson.M, id primitive.ObjectID) error {
 		// Snapshot for the mismatch report before upsert strips the _id.
-		snap := bson.M{"_id": id, "name": doc["name"], "api_key_hash": doc["api_key_hash"]}
+		snap := bson.M{"_id": id, "name": doc["name"], "api_key_hash": doc["api_key_hash"],
+			"api_key_last4": doc["api_key_last4"], "domain": doc["domain"], "status": doc["status"]}
 		source = append(source, snap)
 
 		action := decideTenant(existingIDs[id], m.onlyMissing)
+		if m.dryRun && action == actionInsert {
+			log.Print(wouldInsertLine("tenants", id, doc))
+		}
 		if action == actionSkipExisting {
 			skipped++
 			return nil
@@ -354,10 +376,10 @@ func (m *migration) tenants(ctx context.Context) (int, error) {
 		return n, err
 	}
 
-	mismatches := keyMismatches(source, existing)
-	log.Printf("tenants api_key_hash mismatches: %d", len(mismatches))
-	for _, mm := range mismatches {
-		log.Printf("  mismatch id=%s name=%q source=...%s target=...%s", mm.ID.Hex(), mm.Name, mm.SourceLast4, mm.TargetLast4)
+	drift := tenantDrift(source, existing)
+	log.Printf("tenants drift (key, domain, status) between source and target: %d", len(drift))
+	for _, d := range drift {
+		log.Print("  " + d.String())
 	}
 	log.Print(planLabel(m.dryRun, fmt.Sprintf("tenants inserted=%d skipped=%d overwritten=%d", inserted, skipped, overwritten)))
 	return n, nil
@@ -367,7 +389,7 @@ func (m *migration) tenants(ctx context.Context) (int, error) {
 // the fields the mismatch report and the existence check need.
 func (m *migration) targetTenants(ctx context.Context) ([]bson.M, error) {
 	cur, err := m.to.Collection("tenants").Find(ctx, bson.M{},
-		options.Find().SetProjection(bson.M{"name": 1, "api_key_hash": 1}))
+		options.Find().SetProjection(bson.M{"name": 1, "api_key_hash": 1, "api_key_last4": 1, "domain": 1, "status": 1}))
 	if err != nil {
 		return nil, err
 	}
