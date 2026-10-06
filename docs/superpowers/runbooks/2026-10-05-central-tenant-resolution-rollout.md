@@ -1,5 +1,7 @@
 # Runbook: central tenant resolution rollout
 
+> **Superseded in part (2026-10-06).** digitalservice no longer has a `TENANT_RESOLVER` switch or a local resolver: it always resolves keys through tenantcore and refuses to start without `TENANTCORE_URL` and `TENANTCORE_SERVICE_KEY`. Steps here that set, unset or flip `TENANT_RESOLVER`, or roll back to `local`, no longer apply; there is no rollback switch, so the production dry run and per-tenant key re-issue must come first. See `digitalservice/handover.md` (Latest state).
+
 Moves digitalservice from resolving `X-API-Key` against its own `tenants`
 collection to asking tenantcore (`TENANT_RESOLVER=tenantcore`). Design:
 `docs/superpowers/specs/2026-10-05-central-tenant-resolution-design.md`.

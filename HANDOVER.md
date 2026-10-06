@@ -14,15 +14,18 @@ its service to tenants by API key and does **not** manage tenants. A product
 authenticates itself with a service key and asks tenantcore who a tenant's
 key belongs to. Full statement in `README.md` ("The platform principle").
 
-Central tenant resolution, as of 2026-10-05: the code is done and committed in
-both repos (design:
-`docs/superpowers/specs/2026-10-05-central-tenant-resolution-design.md`), but
-the rollout has not started and digitalservice's `TENANT_RESOLVER` still
-defaults to `local`. Until the flip, digitalservice checks `X-API-Key` against
-its own `tenants` collection, so rotating a key on the tenantcore Details page
-does NOT rotate the key a storefront actually uses. Follow
-`docs/superpowers/runbooks/2026-10-05-central-tenant-resolution-rollout.md`.
-
+Central tenant resolution, as of 2026-10-06: digitalservice ALWAYS resolves
+`X-API-Key` through tenantcore. Its local resolver and the `TENANT_RESOLVER`
+switch were removed (design:
+`docs/superpowers/specs/2026-10-05-central-tenant-resolution-design.md`), so a
+key rotated on the tenantcore Details page is the key a storefront must use,
+and digitalservice refuses to start without `TENANTCORE_URL` and
+`TENANTCORE_SERVICE_KEY`. Verified locally 2026-10-06 (E&S key accepted, a
+bogus key refused); NOT rolled out to production, the migration
+(`cmd/migrate-from-digitalservice`, `-only-missing`) has never run live, and
+keys must be re-issued per tenant. The rollout runbook
+`docs/superpowers/runbooks/2026-10-05-central-tenant-resolution-rollout.md`
+still describes the old switch and its rollback; treat those parts as obsolete.
 ## Running it locally
 
 1. Copy `.env.example` to `.env` and fill in the required block. The two that
