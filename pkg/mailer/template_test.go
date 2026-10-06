@@ -307,3 +307,79 @@ func TestSMTPHeadersCannotCarryLineBreaks(t *testing.T) {
 		}
 	}
 }
+
+func requestNotificationData() map[string]string {
+	return map[string]string{
+		"app":             "Tower",
+		"tenant":          "Tower LLC",
+		"request_type":    "viewing request",
+		"summary":         "Sara asked to view Unit 12A on Friday",
+		"admin_url":       "https://admin.example.com/requests/42",
+		"unsubscribe_url": "https://admin.example.com/unsubscribe?t=abc",
+	}
+}
+
+func TestRequestNotificationRenders(t *testing.T) {
+	if _, ok := Known("request_notification"); !ok {
+		t.Fatal("request_notification is not registered")
+	}
+	data := requestNotificationData()
+	subject, body, err := render(TemplateRequestNotification, data)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(subject, data["request_type"]) || !strings.Contains(subject, data["tenant"]) {
+		t.Fatalf("subject = %q", subject)
+	}
+	for _, k := range []string{"admin_url", "summary", "unsubscribe_url"} {
+		if !strings.Contains(body, data[k]) {
+			t.Errorf("body is missing %s %q:\n%s", k, data[k], body)
+		}
+	}
+	if strings.Contains(subject+body, "{{") {
+		t.Fatalf("unrendered placeholder:\n%s\n%s", subject, body)
+	}
+}
+
+func TestRequestNotificationRequiresAllKeys(t *testing.T) {
+	for k := range requestNotificationData() {
+		data := requestNotificationData()
+		delete(data, k)
+		_, _, err := render(TemplateRequestNotification, data)
+		if err == nil {
+			t.Errorf("dropping %q must be an error", k)
+			continue
+		}
+		if !strings.Contains(err.Error(), k) {
+			t.Errorf("error should name %q, got %v", k, err)
+		}
+	}
+}
+
+func TestRequestNotificationSubjectCannotCarryLineBreaks(t *testing.T) {
+	data := requestNotificationData()
+	data["request_type"] = "x\r\nBcc: a@b.c"
+	subject, body, err := render(TemplateRequestNotification, data)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if strings.ContainsAny(subject, "\r\n") {
+		t.Fatalf("subject kept a line break: %q", subject)
+	}
+	p := buildPayload("Tower", "from@example.com", "to@example.com", subject, body)
+	if strings.ContainsAny(p.Subject, "\r\n") {
+		t.Fatalf("payload subject kept a line break: %q", p.Subject)
+	}
+}
+
+func TestRequestNotificationRejectsNonHTTPSLinks(t *testing.T) {
+	for _, k := range []string{"admin_url", "unsubscribe_url"} {
+		for _, bad := range []string{"http://x.example.com/a", "javascript:alert(1)", "/relative/path"} {
+			data := requestNotificationData()
+			data[k] = bad
+			if _, _, err := render(TemplateRequestNotification, data); err == nil {
+				t.Errorf("%s=%q must be rejected", k, bad)
+			}
+		}
+	}
+}
