@@ -116,6 +116,11 @@ type Quote struct {
 	ID       primitive.ObjectID  `bson:"_id,omitempty" json:"id"`
 	TenantID *primitive.ObjectID `bson:"tenant_id,omitempty" json:"tenant_id,omitempty"`
 
+	// PromotedTenantID is the tenant this quote was promoted into. It is
+	// separate from TenantID, which means "came through that tenant's
+	// storefront" and drives the tenant's Leads page.
+	PromotedTenantID *primitive.ObjectID `bson:"promoted_tenant_id,omitempty" json:"promoted_tenant_id,omitempty"`
+
 	Name        string `bson:"name" json:"name"`
 	Email       string `bson:"email" json:"email"`
 	Phone       string `bson:"phone,omitempty" json:"phone,omitempty"`

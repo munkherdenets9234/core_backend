@@ -184,6 +184,43 @@ func (r *QuoteRepo) List(ctx context.Context, tenantID *primitive.ObjectID, page
 	return out, total, nil
 }
 
+// FindByID returns one quote, or mongo.ErrNoDocuments when absent.
+func (r *QuoteRepo) FindByID(ctx context.Context, id primitive.ObjectID) (*models.Quote, error) {
+	var q models.Quote
+	if err := r.col.FindOne(ctx, bson.M{"_id": id}).Decode(&q); err != nil {
+		return nil, err
+	}
+	return &q, nil
+}
+
+// promoteLinkFilter matches a quote only while it has not been promoted, so
+// two admins promoting the same quote cannot both link it.
+func promoteLinkFilter(id primitive.ObjectID) bson.M {
+	return bson.M{"_id": id, "promoted_tenant_id": bson.M{"$exists": false}}
+}
+
+func promoteLinkUpdate(tenantID primitive.ObjectID, userID *primitive.ObjectID, now time.Time) bson.M {
+	set := bson.M{
+		"promoted_tenant_id": tenantID,
+		"status":             models.QuoteClosed,
+		"updated_at":         now,
+	}
+	if userID != nil {
+		set["user_id"] = userID
+	}
+	return bson.M{"$set": set}
+}
+
+// LinkPromoted records that a quote became a tenant, in one conditional
+// write. linked is false when the quote is missing or already promoted.
+func (r *QuoteRepo) LinkPromoted(ctx context.Context, id, tenantID primitive.ObjectID, userID *primitive.ObjectID) (bool, error) {
+	res, err := r.col.UpdateOne(ctx, promoteLinkFilter(id), promoteLinkUpdate(tenantID, userID, time.Now()))
+	if err != nil {
+		return false, err
+	}
+	return res.MatchedCount > 0, nil
+}
+
 func (r *QuoteRepo) UpdateStatus(ctx context.Context, id primitive.ObjectID, status models.QuoteStatus, userID *primitive.ObjectID) error {
 	set := bson.M{"status": status}
 	if userID != nil {
