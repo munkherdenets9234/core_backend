@@ -268,6 +268,19 @@ func TestSubjectValuesCannotInjectLineBreaks(t *testing.T) {
 
 // Development-only Gmail transport: username and app password select it, the
 // pasted spaces are dropped, and the sender defaults to the login.
+func TestGmailTransportConfig(t *testing.T) {
+	m := New(Config{Username: "me@gmail.com", Password: "abcd efgh ijkl mnop"})
+	if m == nil {
+		t.Fatal("expected a mailer")
+	}
+	if m.cfg.Password != "abcdefghijklmnop" || m.cfg.FromAddress != "me@gmail.com" || m.cfg.Host != DefaultSMTPHost || m.cfg.Port != DefaultSMTPPort {
+		t.Fatalf("cfg = %+v", m.cfg)
+	}
+	if m.From() != "me@gmail.com" {
+		t.Fatalf("From() = %q", m.From())
+	}
+}
+
 func TestTenantPromotedRenders(t *testing.T) {
 	if _, ok := Known("tenant_promoted"); !ok {
 		t.Fatal("tenant_promoted should be a known template")
@@ -295,9 +308,9 @@ func TestTenantPromotedRenders(t *testing.T) {
 		}
 	}
 
-	// Body must have the fixed closing sentence
-	if !strings.Contains(body, "Open Tenants in the platform admin") {
-		t.Fatalf("body missing fixed closing sentence: %q", body)
+	// Body must have the full fixed closing sentence
+	if !strings.Contains(body, "Open Tenants in the platform admin to set its plan and subscription.") {
+		t.Fatalf("body missing full closing sentence: %q", body)
 	}
 
 	// No unsubstituted placeholders
@@ -370,19 +383,6 @@ func TestTenantPromotedBodyHasNoKeyOrLink(t *testing.T) {
 	// No api_key
 	if strings.Contains(subject, "api_key") || strings.Contains(body, "api_key") {
 		t.Fatal("body or subject should not contain api_key")
-	}
-}
-
-func TestGmailTransportConfig(t *testing.T) {
-	m := New(Config{Username: "me@gmail.com", Password: "abcd efgh ijkl mnop"})
-	if m == nil {
-		t.Fatal("expected a mailer")
-	}
-	if m.cfg.Password != "abcdefghijklmnop" || m.cfg.FromAddress != "me@gmail.com" || m.cfg.Host != DefaultSMTPHost || m.cfg.Port != DefaultSMTPPort {
-		t.Fatalf("cfg = %+v", m.cfg)
-	}
-	if m.From() != "me@gmail.com" {
-		t.Fatalf("From() = %q", m.From())
 	}
 }
 
