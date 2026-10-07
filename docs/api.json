@@ -4467,6 +4467,10 @@
           "tenant_id": {
             "type": "string"
           },
+          "promoted_tenant_id": {
+            "type": "string",
+            "description": "ObjectId of the tenant this quote was promoted into. Absent until promoted."
+          },
           "name": {
             "type": "string"
           },
