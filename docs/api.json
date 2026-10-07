@@ -2392,7 +2392,7 @@
         ],
         "operationId": "promoteQuote",
         "summary": "Promote a quote to a tenant",
-        "description": "Creates a tenant from a lead with the same rules as `POST /tenants`, links the quote to it (status `closed`) and emails every active platform user a short notice. Returns the tenant's API key. **This is the only time it is ever shown** — it is never logged, mailed or stored on the quote; a lost key is rotated, never recovered. A quote that already has a tenant (promoted, or received through an existing tenant's storefront) is refused with 409. If the tenant was created but the quote could not be linked (for example a concurrent promote won the link), the answer is still 201 with `quote_linked: false` so the key is not lost.",
+        "description": "Creates a tenant from a lead with the same rules as `POST /tenants`, links the quote to it (status `closed`) and emails every active platform user a short notice. Returns the tenant's API key. **This is the only time it is ever shown** — it is never logged, mailed or stored on the quote; a lost key is rotated, never recovered. A quote that already has a tenant (promoted, or received through an existing tenant's storefront) is refused with 409. If the tenant was created but the quote could not be linked (for example a concurrent promote won the link), the answer is still 201 with `quote_linked: false` so the key is not lost; `quote_link` then says why (`taken`: a concurrent promote linked and closed the quote, so suspend the duplicate tenant; `failed`: the link write failed, close the quote by hand). The slug follows the same rule as `POST /tenants`.",
         "parameters": [
           {
             "name": "id",
@@ -2421,7 +2421,7 @@
                   },
                   "slug": {
                     "type": "string",
-                    "description": "Must be unique across every tenant."
+                    "description": "Lowercase letters, digits and hyphens only (hyphens between runs, none leading, trailing or doubled), 1 to 63 characters; anything else is rejected with 400, never rewritten. Must be unique across every tenant."
                   },
                   "contact_email": {
                     "type": "string"
@@ -2460,6 +2460,15 @@
                             "quote_linked": {
                               "type": "boolean",
                               "description": "False when the tenant exists but the quote was not linked to it."
+                            },
+                            "quote_link": {
+                              "type": "string",
+                              "enum": [
+                                "linked",
+                                "taken",
+                                "failed"
+                              ],
+                              "description": "`linked`: the quote is linked to this tenant. `taken`: another promote of the same quote won the link, so the quote stays linked to that tenant and this tenant is a duplicate. `failed`: the link write failed and the quote may still be open."
                             }
                           }
                         }
@@ -3623,7 +3632,7 @@
           },
           "slug": {
             "type": "string",
-            "description": "Must be unique across every tenant."
+            "description": "Lowercase letters, digits and hyphens only (hyphens between runs, none leading, trailing or doubled), 1 to 63 characters; anything else is rejected with 400, never rewritten. Must be unique across every tenant."
           },
           "contact_email": {
             "type": "string"
