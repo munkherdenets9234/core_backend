@@ -2856,7 +2856,8 @@
                       "password_reset",
                       "password_reset_code",
                       "staff_invite",
-                      "subscription_expiring"
+                      "subscription_expiring",
+                      "tenant_promoted"
                     ],
                     "description": "Which message to send. A closed set — an unknown name is a 400 naming the valid options. `password_reset` carries a one-time link; `password_changed` is the after-the-fact notice, which exists because a password change the owner did not make is the one thing they must hear about immediately. `password_reset_code` is the same flow as `password_reset` but carries a six-digit code instead of a link. `subscription_expiring` is the operator notice that a tenant's subscription is about to lapse; tenantcore sends it itself on a timer. `staff_invite` invites a person to a tenant's product (data: app, name, inviter, invite_url, expires_in); `lead_notification` tells a tenant a visitor left an enquiry (data: app, tenant, lead_name, lead_contact, listing, lead_url). Both take fixed fields only, never a free-text body."
                   },

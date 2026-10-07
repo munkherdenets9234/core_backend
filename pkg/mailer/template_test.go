@@ -268,6 +268,111 @@ func TestSubjectValuesCannotInjectLineBreaks(t *testing.T) {
 
 // Development-only Gmail transport: username and app password select it, the
 // pasted spaces are dropped, and the sender defaults to the login.
+func TestTenantPromotedRenders(t *testing.T) {
+	if _, ok := Known("tenant_promoted"); !ok {
+		t.Fatal("tenant_promoted should be a known template")
+	}
+
+	subject, body, err := render(TemplatePromoted, map[string]string{
+		"app":         "Inno Nomads Console",
+		"tenant":      "E and S Discovery Mongolia",
+		"slug":        "es-discovery",
+		"promoted_by": "Munkh-Erdene",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	// Subject must have the tenant name
+	if !strings.Contains(subject, "E and S Discovery Mongolia") {
+		t.Fatalf("subject %q should contain tenant name", subject)
+	}
+
+	// Body must have slug and promoted_by
+	for _, want := range []string{"es-discovery", "Munkh-Erdene"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %q", want)
+		}
+	}
+
+	// Body must have the fixed closing sentence
+	if !strings.Contains(body, "Open Tenants in the platform admin") {
+		t.Fatalf("body missing fixed closing sentence: %q", body)
+	}
+
+	// No unsubstituted placeholders
+	if strings.Contains(subject, "{{") || strings.Contains(body, "{{") {
+		t.Fatal("unsubstituted placeholder left in output")
+	}
+}
+
+func TestTenantPromotedRequiresAllKeys(t *testing.T) {
+	data := map[string]string{
+		"app":         "Console",
+		"tenant":      "Tenant Name",
+		"slug":        "tenant-slug",
+		"promoted_by": "Admin User",
+	}
+
+	// Test dropping each required key
+	requiredKeys := []string{"app", "tenant", "slug", "promoted_by"}
+	for _, keyToDrop := range requiredKeys {
+		testData := make(map[string]string)
+		for k, v := range data {
+			if k != keyToDrop {
+				testData[k] = v
+			}
+		}
+
+		_, _, err := render(TemplatePromoted, testData)
+		if err == nil {
+			t.Fatalf("expected an error when %q is missing", keyToDrop)
+		}
+		if !strings.Contains(err.Error(), keyToDrop) {
+			t.Fatalf("error should name the missing key %q, got %v", keyToDrop, err)
+		}
+	}
+}
+
+func TestTenantPromotedSubjectCannotCarryLineBreaks(t *testing.T) {
+	subject, body, err := render(TemplatePromoted, map[string]string{
+		"app":         "Console",
+		"tenant":      "x\r\nBcc: a@b.c",
+		"slug":        "slug",
+		"promoted_by": "user",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	p := buildPayload("Console", "from@example.com", "to@example.com", subject, body)
+	if strings.ContainsAny(p.Subject, "\r\n") {
+		t.Fatalf("subject kept a line break: %q", p.Subject)
+	}
+}
+
+func TestTenantPromotedBodyHasNoKeyOrLink(t *testing.T) {
+	subject, body, err := render(TemplatePromoted, map[string]string{
+		"app":         "Console",
+		"tenant":      "Tenant Name",
+		"slug":        "tenant-slug",
+		"promoted_by": "Admin User",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	// No http/https links
+	if strings.Contains(subject, "http") || strings.Contains(body, "http") {
+		t.Fatal("body or subject should not contain http")
+	}
+
+	// No api_key
+	if strings.Contains(subject, "api_key") || strings.Contains(body, "api_key") {
+		t.Fatal("body or subject should not contain api_key")
+	}
+}
+
 func TestGmailTransportConfig(t *testing.T) {
 	m := New(Config{Username: "me@gmail.com", Password: "abcd efgh ijkl mnop"})
 	if m == nil {
