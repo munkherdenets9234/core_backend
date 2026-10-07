@@ -387,3 +387,14 @@ func (s *ServiceClientService) Rotate(ctx context.Context, idStr string) (*model
 func normaliseEmail(e string) string {
 	return strings.ToLower(strings.TrimSpace(e))
 }
+
+// DisplayName is the name of the platform user with this id, or "" when it
+// cannot be read. It exists for attribution in notices, where a lookup that
+// fails must cost the name and nothing else.
+func (s *PlatformUserService) DisplayName(ctx context.Context, id primitive.ObjectID) string {
+	u, err := s.repo.FindByID(ctx, id)
+	if err != nil || u == nil {
+		return ""
+	}
+	return u.Name
+}

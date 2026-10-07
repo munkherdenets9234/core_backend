@@ -48,6 +48,12 @@ type App struct {
 	// passwordReset sends its mail in the background, so shutdown drains it:
 	// a reset requested a moment before a restart should still arrive.
 	passwordReset *service.PasswordResetService
+
+	// promote sends its admin notice in the background too. Drained in Close,
+	// which runs only after the HTTP server has stopped: Promote (the only
+	// caller of the WaitGroup's Add) can no longer be running by then, so
+	// Wait cannot race a late Add.
+	promote *service.PromoteService
 }
 
 // New wires everything from cfg. It returns an error rather than exiting so a
@@ -118,9 +124,11 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 		}
 	}
 
+	tenantSvc := service.NewTenantService(tenants)
 	limiter := middleware.NewRateLimiter()
 	mail := buildMailer(cfg, log)
 	passwordResetSvc := service.NewPasswordResetService(platformUsers, passwordResets, mail, log)
+	promoteSvc := service.NewPromoteService(quotes, tenantSvc, platformUsers, mail, service.AppName, log)
 
 	srv := api.NewServer(api.Deps{
 		Config: cfg,
@@ -133,7 +141,7 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 		PublicKeyB64: maker.PublicKeyB64(),
 		KeyID:        maker.KeyID(),
 
-		Tenant:        service.NewTenantService(tenants),
+		Tenant:        tenantSvc,
 		Plan:          service.NewPlanService(plans),
 		Subscription:  service.NewSubscriptionService(subscriptions, plans),
 		PlatformUser:  platformUserSvc,
@@ -144,6 +152,7 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 		Quote:         service.NewQuoteService(quotes),
 		TenantPlan:    service.NewTenantPlanService(tenantPlans, plans, tenants),
 		SiteContent:   service.NewSiteContentService(siteContent),
+		Promote:       promoteSvc,
 	})
 
 	// The verifying key is logged at startup so it can be copied into a
@@ -163,6 +172,7 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 		stopJobs: stopJobs,
 
 		passwordReset: passwordResetSvc,
+		promote:       promoteSvc,
 	}, nil
 }
 
@@ -209,6 +219,10 @@ func (a *App) Close(ctx context.Context) {
 	}
 	if a.passwordReset != nil {
 		a.passwordReset.Drain()
+	}
+	// After srv.Shutdown (see Run): no request can start a new notice now.
+	if a.promote != nil {
+		a.promote.Drain()
 	}
 	if a.limiter != nil {
 		a.limiter.Close()

@@ -2385,6 +2385,126 @@
         }
       }
     },
+    "/api/v1/admin/quotes/{id}/promote": {
+      "post": {
+        "tags": [
+          "Content"
+        ],
+        "operationId": "promoteQuote",
+        "summary": "Promote a quote to a tenant",
+        "description": "Creates a tenant from a lead with the same rules as `POST /tenants`, links the quote to it (status `closed`) and emails every active platform user a short notice. Returns the tenant's API key. **This is the only time it is ever shown** — it is never logged, mailed or stored on the quote; a lost key is rotated, never recovered. A quote that already has a tenant (promoted, or received through an existing tenant's storefront) is refused with 409. If the tenant was created but the quote could not be linked (for example a concurrent promote won the link), the answer is still 201 with `quote_linked: false` so the key is not lost.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Quote id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "slug"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "slug": {
+                    "type": "string",
+                    "description": "Must be unique across every tenant."
+                  },
+                  "contact_email": {
+                    "type": "string"
+                  },
+                  "domain": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "tenant": {
+                              "$ref": "#/components/schemas/Tenant"
+                            },
+                            "api_key": {
+                              "type": "string",
+                              "description": "Shown exactly once. Store it now — it cannot be retrieved later, only rotated."
+                            },
+                            "quote_linked": {
+                              "type": "boolean",
+                              "description": "False when the tenant exists but the quote was not linked to it."
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "The caller is not a superadmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The quote was already promoted or came through an existing tenant, or a tenant with this slug already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      }
+    },
     "/api/v1/admin/tenants/{id}/quotes": {
       "get": {
         "tags": [
