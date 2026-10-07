@@ -53,7 +53,20 @@ type PromoteResult struct {
 	Tenant      *models.Tenant
 	APIKey      string
 	QuoteLinked bool
+	// QuoteLink says why the quote is or is not linked: QuoteLinkLinked,
+	// QuoteLinkTaken or QuoteLinkFailed. QuoteLinked stays for older clients.
+	QuoteLink string
 }
+
+// QuoteLink values. "taken" means the conditional link matched nothing: the
+// quote is already linked (and closed) by a concurrent promote, so what the
+// caller must do is deal with the duplicate tenant, not close the quote.
+// "failed" means the link write errored and the quote may still be open.
+const (
+	QuoteLinkLinked = "linked"
+	QuoteLinkTaken  = "taken"
+	QuoteLinkFailed = "failed"
+)
 
 // PromoteService turns a quote into a tenant and tells the platform admins.
 type PromoteService struct {
@@ -131,15 +144,22 @@ func (s *PromoteService) Promote(ctx context.Context, quoteID string, in Promote
 	// link half-way: the key it was owed is gone, but the quote can still
 	// record where it went.
 	linked, linkErr := s.quotes.LinkPromoted(context.WithoutCancel(ctx), id, created.ID, actorID)
-	if linkErr != nil || !linked {
+	outcome := QuoteLinkLinked
+	switch {
+	case linkErr != nil:
+		outcome = QuoteLinkFailed
+	case !linked:
+		outcome = QuoteLinkTaken
+	}
+	if outcome != QuoteLinkLinked {
 		s.log.Warn("promote: tenant created but quote not linked",
 			zap.String("quote", id.Hex()), zap.String("tenant", created.ID.Hex()),
-			zap.Bool("write_failed", linkErr != nil))
+			zap.String("quote_link", outcome))
 	}
 
 	s.notify(id, created.Name, created.Slug, actorName)
 
-	return &PromoteResult{Tenant: created, APIKey: rawKey, QuoteLinked: linkErr == nil && linked}, nil
+	return &PromoteResult{Tenant: created, APIKey: rawKey, QuoteLinked: outcome == QuoteLinkLinked, QuoteLink: outcome}, nil
 }
 
 // notify mails every active platform user in one background goroutine. It is

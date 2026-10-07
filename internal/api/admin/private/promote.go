@@ -72,6 +72,7 @@ func (h *promoteController) Promote(c *gin.Context) error {
 		"tenant":       view.TenantOf(res.Tenant),
 		"api_key":      res.APIKey,
 		"quote_linked": res.QuoteLinked,
+		"quote_link":   res.QuoteLink,
 	})
 	return nil
 }

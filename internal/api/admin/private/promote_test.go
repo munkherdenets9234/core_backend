@@ -172,6 +172,7 @@ func TestPromoteReturns201WithKeyOnce(t *testing.T) {
 			Tenant      map[string]any `json:"tenant"`
 			APIKey      string         `json:"api_key"`
 			QuoteLinked *bool          `json:"quote_linked"`
+			QuoteLink   string         `json:"quote_link"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &b); err != nil {
@@ -182,6 +183,9 @@ func TestPromoteReturns201WithKeyOnce(t *testing.T) {
 	}
 	if b.Data.QuoteLinked == nil || !*b.Data.QuoteLinked {
 		t.Error("quote_linked should be true")
+	}
+	if b.Data.QuoteLink != "linked" {
+		t.Errorf("quote_link = %q, want linked", b.Data.QuoteLink)
 	}
 	if b.Data.Tenant["slug"] != "acme" || b.Data.Tenant["api_key_last4"] != "abcd" {
 		t.Errorf("tenant view wrong: %v", b.Data.Tenant)
@@ -206,6 +210,9 @@ func TestPromoteReportsAnUnlinkedQuote(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"quote_linked":false`) {
 		t.Errorf("quote_linked:false must be explicit: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"quote_link":"taken"`) {
+		t.Errorf("quote_link must say another promote won: %s", w.Body.String())
 	}
 }
 

@@ -592,3 +592,79 @@ func TestNotifyDoesNotDelayPromote(t *testing.T) {
 		t.Fatalf("mails after Drain = %d, want 2", len(sent))
 	}
 }
+
+// ── quote_link: why the quote is not linked ──────────────────────────────
+
+func TestPromoteQuoteLinkOutcomes(t *testing.T) {
+	cases := []struct {
+		name       string
+		ok         bool
+		err        error
+		wantLink   string
+		wantLinked bool
+	}{
+		{"linked", true, nil, "linked", true},
+		{"taken: another promote won the link", false, nil, "taken", false},
+		{"failed: the link write errored", false, errors.New("write conflict"), "failed", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newPromoHarness(t)
+			h.quotes.linkOK, h.quotes.linkErr = c.ok, c.err
+			res, err := h.promote(t, promoInput)
+			if err != nil {
+				t.Fatalf("Promote returned %v", err)
+			}
+			if res.QuoteLink != c.wantLink {
+				t.Errorf("QuoteLink = %q, want %q", res.QuoteLink, c.wantLink)
+			}
+			if res.QuoteLinked != c.wantLinked {
+				t.Errorf("QuoteLinked = %v, want %v", res.QuoteLinked, c.wantLinked)
+			}
+			if res.APIKey != testKey() {
+				t.Error("the key must still be returned")
+			}
+			if sent, _ := h.mail.snapshot(); len(sent) != 2 {
+				t.Errorf("mails = %d, want 2: admins still need to know", len(sent))
+			}
+			if c.wantLink == "linked" {
+				return
+			}
+			found := false
+			for _, e := range h.logs.All() {
+				ctx := e.ContextMap()
+				if ctx["quote"] == h.quoteID && ctx["tenant"] == res.Tenant.ID.Hex() {
+					found = true
+				}
+				if strings.Contains(e.Message, testKey()) {
+					t.Error("key in a log message")
+				}
+			}
+			if !found {
+				t.Error("no log entry naming the quote id and tenant id")
+			}
+		})
+	}
+}
+
+// ── Slug validation reaches promote through TenantService.Create ──────────
+
+func TestPromoteRejectsInvalidSlugCreatesAndLinksNothing(t *testing.T) {
+	h := newPromoHarness(t)
+	// The real tenant service validates before it touches storage, so a nil
+	// repository proves nothing was written.
+	h.svc = NewPromoteService(h.quotes, &TenantService{}, h.users, h.mail, "Test Console", zap.NewNop())
+	in := promoInput
+	in.Slug = "My Shop"
+	res, err := h.promote(t, in)
+	if err == nil || res != nil {
+		t.Fatalf("Promote(bad slug) = %v, %v; want an error", res, err)
+	}
+	wantStatus(t, err, http.StatusBadRequest)
+	if h.quotes.links != 0 {
+		t.Fatal("LinkPromoted called for a rejected slug")
+	}
+	if _, attempts := h.mail.snapshot(); len(attempts) != 0 {
+		t.Fatal("mail sent for a rejected slug")
+	}
+}
