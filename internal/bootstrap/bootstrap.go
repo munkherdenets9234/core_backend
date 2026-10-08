@@ -126,7 +126,8 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 
 	tenantSvc := service.NewTenantService(tenants)
 	limiter := middleware.NewRateLimiter()
-	mail := buildMailer(cfg, log)
+	mailLog := repository.NewMailLogRepo(db)
+	mail := buildMailer(cfg, log, mailLog)
 	passwordResetSvc := service.NewPasswordResetService(platformUsers, passwordResets, mail, log)
 	promoteSvc := service.NewPromoteService(quotes, tenantSvc, platformUsers, mail, service.AppName, log)
 
@@ -153,6 +154,7 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 		TenantPlan:    service.NewTenantPlanService(tenantPlans, plans, tenants),
 		SiteContent:   service.NewSiteContentService(siteContent),
 		Promote:       promoteSvc,
+		MailLog:       service.NewMailLogService(mailLog),
 	})
 
 	// The verifying key is logged at startup so it can be copied into a
@@ -289,7 +291,7 @@ func startExpiryNotice(
 // depend on. What it costs when off is worth naming precisely — password
 // resets are the whole reason this exists, and "mail is off" and "resets are
 // broken" are the same sentence.
-func buildMailer(cfg *config.Config, log *zap.Logger) *mailer.Mailer {
+func buildMailer(cfg *config.Config, log *zap.Logger, rec mailer.Recorder) *mailer.Mailer {
 	if !cfg.EmailEnabled() {
 		log.Warn("email is off — BREVO_API_KEY/MAIL_FROM_EMAIL are not both set (nor GMAIL_* in development); " +
 			"POST /svc/notifications/email answers 503 and no password-reset mail is delivered")
@@ -302,6 +304,8 @@ func buildMailer(cfg *config.Config, log *zap.Logger) *mailer.Mailer {
 			APIKey:      cfg.BrevoAPIKey,
 			FromAddress: cfg.MailFromEmail,
 			FromName:    cfg.MailFromName,
+			Recorder:    rec,
+			Log:         log,
 		})
 		log.Info("email ready", zap.String("transport", "brevo-https"), zap.String("from", m.From()))
 		return m
@@ -310,6 +314,8 @@ func buildMailer(cfg *config.Config, log *zap.Logger) *mailer.Mailer {
 		Username: cfg.GmailEmail,
 		Password: cfg.GmailPassword,
 		FromName: cfg.MailFromName,
+		Recorder: rec,
+		Log:      log,
 	})
 	log.Warn("email ready via Gmail SMTP — development only", zap.String("from", m.From()))
 	return m

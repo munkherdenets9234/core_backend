@@ -44,6 +44,7 @@ type Deps struct {
 	TenantPlan    *service.TenantPlanService
 	SiteContent   *service.SiteContentService
 	Promote       *service.PromoteService
+	MailLog       *service.MailLogService
 }
 
 type Server struct {

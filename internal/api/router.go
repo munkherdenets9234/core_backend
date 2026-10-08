@@ -48,6 +48,7 @@ func (s *Server) buildEngine() *gin.Engine {
 		TenantPlan:    d.TenantPlan,
 		SiteContent:   d.SiteContent,
 		Promote:       d.Promote,
+		MailLog:       d.MailLog,
 		AuthRateLimit: s.limit("admin-auth", d.Config.AuthRatePerMinute),
 	})
 

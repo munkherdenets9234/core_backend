@@ -56,6 +56,11 @@ const (
 	// promoted to a new tenant. It carries the tenant name and slug only, not
 	// the quote itself or any contact details.
 	TemplatePromoted Template = "tenant_promoted"
+	// TemplateRequestNotification tells a tenant's staff that a customer
+	// request arrived. Sent to staff who opted in, so it carries an
+	// unsubscribe link. Every value is inserted at a fixed position and
+	// sanitized like the other templates; the subject has CR/LF stripped.
+	TemplateRequestNotification Template = "request_notification"
 )
 
 type templateDef struct {
@@ -145,6 +150,23 @@ Open it here:
 {{lead_url}}
 `,
 	},
+	TemplateRequestNotification: {
+		subject:  "New {{request_type}} for {{tenant}}",
+		required: []string{"app", "tenant", "request_type", "summary", "admin_url", "unsubscribe_url"},
+		body: `A new request arrived for {{tenant}} through {{app}}.
+
+Type:     {{request_type}}
+Tenant:   {{tenant}}
+Summary:  {{summary}}
+
+Open it here:
+
+{{admin_url}}
+
+You receive this because you asked to be notified of new requests. To stop
+these emails, unsubscribe here: {{unsubscribe_url}}
+`,
+	},
 	TemplatePasswordChanged: {
 		subject:  "Your {{app}} password was changed",
 		required: []string{"app", "name"},
@@ -226,7 +248,7 @@ const (
 // minted by a product service and land in mail a person is asked to click;
 // anything else (http, javascript:, a relative path) is a caller bug or an
 // attempt to point the reader somewhere else.
-var httpsOnly = map[string]bool{"invite_url": true, "lead_url": true}
+var httpsOnly = map[string]bool{"invite_url": true, "lead_url": true, "admin_url": true, "unsubscribe_url": true}
 
 // sanitize returns a copy of data safe to insert into a fixed template.
 //

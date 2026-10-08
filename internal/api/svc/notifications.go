@@ -1,6 +1,7 @@
 package svc
 
 import (
+	"github.com/eandstravel/tenantcore/internal/api/apictx"
 	"github.com/eandstravel/tenantcore/pkg/apierr"
 	"github.com/eandstravel/tenantcore/pkg/mailer"
 	"github.com/eandstravel/tenantcore/pkg/response"
@@ -28,6 +29,9 @@ type sendEmailRequest struct {
 	To       string            `json:"to" binding:"required,email"`
 	Template string            `json:"template" binding:"required"`
 	Data     map[string]string `json:"data"`
+	// TenantID is the tenant the mail is for. Optional, and used only to
+	// label the mail log; it does not change what is sent.
+	TenantID string `json:"tenant_id" binding:"omitempty,hexadecimal,len=24"`
 }
 
 // Send delivers one templated message.
@@ -57,7 +61,9 @@ func (h *notificationsController) Send(c *gin.Context) error {
 		return apierr.BadRequest("unknown template: " + req.Template)
 	}
 
-	if err := h.mail.Send(req.To, tmpl, req.Data); err != nil {
+	// Named so the mail log can say which service asked, and for whom.
+	src := mailer.ServiceSource(apictx.ServiceName(c), req.TenantID)
+	if err := h.mail.SendFrom(src, req.To, tmpl, req.Data); err != nil {
 		// Wrapped rather than surfaced: the underlying error can name the
 		// SMTP host and the account, which belongs in our log and not in a
 		// response body another service may echo.
