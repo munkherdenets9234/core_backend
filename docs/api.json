@@ -2385,6 +2385,135 @@
         }
       }
     },
+    "/api/v1/admin/quotes/{id}/promote": {
+      "post": {
+        "tags": [
+          "Content"
+        ],
+        "operationId": "promoteQuote",
+        "summary": "Promote a quote to a tenant",
+        "description": "Creates a tenant from a lead with the same rules as `POST /tenants`, links the quote to it (status `closed`) and emails every active platform user a short notice. Returns the tenant's API key. **This is the only time it is ever shown** — it is never logged, mailed or stored on the quote; a lost key is rotated, never recovered. A quote that already has a tenant (promoted, or received through an existing tenant's storefront) is refused with 409. If the tenant was created but the quote could not be linked (for example a concurrent promote won the link), the answer is still 201 with `quote_linked: false` so the key is not lost; `quote_link` then says why (`taken`: a concurrent promote linked and closed the quote, so suspend the duplicate tenant; `failed`: the link write failed, close the quote by hand). The slug follows the same rule as `POST /tenants`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Quote id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "slug"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "slug": {
+                    "type": "string",
+                    "description": "Lowercase letters, digits and hyphens only (hyphens between runs, none leading, trailing or doubled), 1 to 63 characters; anything else is rejected with 400, never rewritten. Must be unique across every tenant."
+                  },
+                  "contact_email": {
+                    "type": "string"
+                  },
+                  "domain": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "tenant": {
+                              "$ref": "#/components/schemas/Tenant"
+                            },
+                            "api_key": {
+                              "type": "string",
+                              "description": "Shown exactly once. Store it now — it cannot be retrieved later, only rotated."
+                            },
+                            "quote_linked": {
+                              "type": "boolean",
+                              "description": "False when the tenant exists but the quote was not linked to it."
+                            },
+                            "quote_link": {
+                              "type": "string",
+                              "enum": [
+                                "linked",
+                                "taken",
+                                "failed"
+                              ],
+                              "description": "`linked`: the quote is linked to this tenant. `taken`: another promote of the same quote won the link, so the quote stays linked to that tenant and this tenant is a duplicate. `failed`: the link write failed and the quote may still be open."
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "The caller is not a superadmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The quote was already promoted or came through an existing tenant, or a tenant with this slug already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      }
+    },
     "/api/v1/admin/tenants/{id}/quotes": {
       "get": {
         "tags": [
@@ -2857,16 +2986,17 @@
                       "password_reset_code",
                       "request_notification",
                       "staff_invite",
-                      "subscription_expiring"
+                      "subscription_expiring",
+                      "tenant_promoted"
                     ],
-                    "description": "Which message to send. A closed set — an unknown name is a 400 naming the valid options. `password_reset` carries a one-time link; `password_changed` is the after-the-fact notice, which exists because a password change the owner did not make is the one thing they must hear about immediately. `password_reset_code` is the same flow as `password_reset` but carries a six-digit code instead of a link. `subscription_expiring` is the operator notice that a tenant's subscription is about to lapse; tenantcore sends it itself on a timer. `staff_invite` invites a person to a tenant's product (data: app, name, inviter, invite_url, expires_in); `lead_notification` tells a tenant a visitor left an enquiry (data: app, tenant, lead_name, lead_contact, listing, lead_url); `request_notification` tells a tenant's staff a customer request arrived (data: app, tenant, request_type, summary, admin_url, unsubscribe_url). All take fixed fields only, never a free-text body."
+                    "description": "Which message to send. A closed set — an unknown name is a 400 naming the valid options. `password_reset` carries a one-time link; `password_changed` is the after-the-fact notice, which exists because a password change the owner did not make is the one thing they must hear about immediately. `password_reset_code` is the same flow as `password_reset` but carries a six-digit code instead of a link. `subscription_expiring` is the operator notice that a tenant's subscription is about to lapse; tenantcore sends it itself on a timer. `staff_invite` invites a person to a tenant's product (data: app, name, inviter, invite_url, expires_in); `lead_notification` tells a tenant a visitor left an enquiry (data: app, tenant, lead_name, lead_contact, listing, lead_url); `request_notification` tells a tenant's staff a customer request arrived (data: app, tenant, request_type, summary, admin_url, unsubscribe_url). All take fixed fields only, never a free-text body. `tenant_promoted` is sent to all platform users when a quote is promoted to a new tenant (data: app, tenant, slug, promoted_by; no secrets)."
                   },
                   "data": {
                     "type": "object",
                     "additionalProperties": {
                       "type": "string"
                     },
-                    "description": "Values substituted into the template. `password_reset` requires `app`, `name`, `reset_url` and `expires_in`; `password_changed` requires `app` and `name`. A missing key is a 400 naming it, never a mail that goes out with a blank where the link should be. `password_reset_code` requires `app`, `name`, `code` and `expires_in`; `subscription_expiring` requires `app`, `tenant`, `plan`, `ends_on` and `days_left`.",
+                    "description": "Values substituted into the template. `password_reset` requires `app`, `name`, `reset_url` and `expires_in`; `password_changed` requires `app` and `name`. A missing key is a 400 naming it, never a mail that goes out with a blank where the link should be. `password_reset_code` requires `app`, `name`, `code` and `expires_in`; `subscription_expiring` requires `app`, `tenant`, `plan`, `ends_on` and `days_left`; `tenant_promoted` requires `app`, `tenant`, `slug` and `promoted_by`.",
                     "example": {
                       "app": "Travel Mongolia Admin",
                       "name": "Munkh-Erdene",
@@ -3599,7 +3729,7 @@
           },
           "slug": {
             "type": "string",
-            "description": "Must be unique across every tenant."
+            "description": "Lowercase letters, digits and hyphens only (hyphens between runs, none leading, trailing or doubled), 1 to 63 characters; anything else is rejected with 400, never rewritten. Must be unique across every tenant."
           },
           "contact_email": {
             "type": "string"
@@ -4442,6 +4572,10 @@
           },
           "tenant_id": {
             "type": "string"
+          },
+          "promoted_tenant_id": {
+            "type": "string",
+            "description": "ObjectId of the tenant this quote was promoted into. Absent until promoted."
           },
           "name": {
             "type": "string"

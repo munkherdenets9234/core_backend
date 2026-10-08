@@ -43,6 +43,7 @@ type Deps struct {
 	Quote         *service.QuoteService
 	TenantPlan    *service.TenantPlanService
 	SiteContent   *service.SiteContentService
+	Promote       *service.PromoteService
 	MailLog       *service.MailLogService
 }
 

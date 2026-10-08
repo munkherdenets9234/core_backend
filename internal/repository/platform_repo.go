@@ -79,6 +79,26 @@ func (r *PlatformUserRepo) CountActive(ctx context.Context) (int64, error) {
 	return r.col.CountDocuments(ctx, bson.M{"status": models.PlatformUserActive})
 }
 
+func listActiveFilter() bson.M {
+	return bson.M{"status": models.PlatformUserActive}
+}
+
+// ListActive returns every active platform user, unpaged. The set is the
+// handful of operators, and callers (notifications) need all of them.
+func (r *PlatformUserRepo) ListActive(ctx context.Context) ([]*models.PlatformUser, error) {
+	cur, err := r.col.Find(ctx, listActiveFilter(), options.Find().SetSort(bson.D{{Key: "created_at", Value: 1}}))
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+
+	out := []*models.PlatformUser{}
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (r *PlatformUserRepo) UpdateStatus(ctx context.Context, id primitive.ObjectID, status models.PlatformUserStatus) error {
 	return updateOne(ctx, r.col, id, bson.M{"status": status})
 }

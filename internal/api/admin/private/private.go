@@ -24,6 +24,7 @@ type Deps struct {
 	Quote         *service.QuoteService
 	TenantPlan    *service.TenantPlanService
 	SiteContent   *service.SiteContentService
+	Promote       *service.PromoteService
 	MailLog       *service.MailLogService
 
 	// AuthRateLimit guards the password-changing routes, which take a
@@ -38,6 +39,12 @@ func Register(base *gin.RouterGroup, d Deps) {
 	clients := &clientsController{svc: d.ServiceClient}
 	content := &contentController{showcase: d.Showcase, quotes: d.Quote, tenantPlan: d.TenantPlan, site: d.SiteContent}
 
+	promote := &promoteController{svc: d.Promote}
+	// Only a real service: a nil *PlatformUserService stored in the interface
+	// would not compare equal to nil.
+	if d.PlatformUser != nil {
+		promote.actors = d.PlatformUser
+	}
 	mailLog := &mailLogController{svc: d.MailLog}
 
 	g := httpx.Wrap(base)
@@ -85,6 +92,7 @@ func Register(base *gin.RouterGroup, d Deps) {
 	q := g.Group("/quotes")
 	q.GET("", content.ListQuotes)
 	q.PUT("/:id/status", content.UpdateQuoteStatus)
+	q.POST("/:id/promote", promote.Promote)
 
 	// The marketing site's editable copy. Under /content rather than hung
 	// off a tenant: this is the operator's own site, which belongs to no

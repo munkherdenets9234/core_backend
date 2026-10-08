@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -22,6 +23,24 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"golang.org/x/net/idna"
 )
+
+// slugPattern is the whole slug rule: lowercase letters and digits in runs
+// separated by single hyphens. The slug names the tenant on the wire and in
+// hosts, so it is rejected, never rewritten, when it does not fit.
+var slugPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+const slugMaxLen = 63
+
+// validateSlug checks an already-trimmed slug.
+func validateSlug(slug string) error {
+	if slug == "" {
+		return apierr.BadRequest("slug is required")
+	}
+	if len(slug) > slugMaxLen || !slugPattern.MatchString(slug) {
+		return apierr.BadRequest("slug must be lowercase letters, digits and hyphens, 1 to 63 characters")
+	}
+	return nil
+}
 
 type TenantService struct {
 	repo *repository.TenantRepo
@@ -43,8 +62,8 @@ func (s *TenantService) Create(ctx context.Context, t *models.Tenant) (*models.T
 	if t.Name == "" {
 		return nil, "", apierr.BadRequest("name is required")
 	}
-	if t.Slug == "" {
-		return nil, "", apierr.BadRequest("slug is required")
+	if err := validateSlug(t.Slug); err != nil {
+		return nil, "", err
 	}
 
 	raw, hash, err := apikey.Generate()

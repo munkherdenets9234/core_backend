@@ -52,6 +52,10 @@ const (
 	// lead's fields are inserted into fixed positions, never as the body.
 	TemplateLeadNotification Template = "lead_notification"
 
+	// TemplatePromoted tells all active platform users that a quote has been
+	// promoted to a new tenant. It carries the tenant name and slug only, not
+	// the quote itself or any contact details.
+	TemplatePromoted Template = "tenant_promoted"
 	// TemplateRequestNotification tells a tenant's staff that a customer
 	// request arrived. Sent to staff who opted in, so it carries an
 	// unsubscribe link. Every value is inserted at a fixed position and
@@ -172,6 +176,18 @@ The password for your {{app}} account was just changed.
 
 If this was you, nothing further is needed. If it was not, contact your
 administrator immediately — someone else may have access to the account.
+`,
+	},
+	TemplatePromoted: {
+		subject:  "New tenant {{tenant}}",
+		required: []string{"app", "tenant", "slug", "promoted_by"},
+		body: `A new tenant has been created from a quote and is ready to set up.
+
+Tenant:    {{tenant}}
+Slug:      {{slug}}
+Promoted by: {{promoted_by}}
+
+Open Tenants in the platform admin to set its plan and subscription.
 `,
 	},
 }

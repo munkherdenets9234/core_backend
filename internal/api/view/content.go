@@ -234,19 +234,20 @@ func TenantDetailOf(d *models.TenantDetail) *TenantDetail {
 // Quote is the console's view of a lead. There is no public counterpart:
 // the contact form writes and never reads.
 type Quote struct {
-	ID          string    `json:"id"`
-	TenantID    string    `json:"tenant_id,omitempty"`
-	Name        string    `json:"name"`
-	Email       string    `json:"email"`
-	Phone       string    `json:"phone,omitempty"`
-	CompanyName string    `json:"company_name,omitempty"`
-	PackageSlug string    `json:"package_slug,omitempty"`
-	Budget      string    `json:"budget,omitempty"`
-	Timeline    string    `json:"timeline,omitempty"`
-	Message     string    `json:"message,omitempty"`
-	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID               string    `json:"id"`
+	TenantID         string    `json:"tenant_id,omitempty"`
+	PromotedTenantID string    `json:"promoted_tenant_id,omitempty"`
+	Name             string    `json:"name"`
+	Email            string    `json:"email"`
+	Phone            string    `json:"phone,omitempty"`
+	CompanyName      string    `json:"company_name,omitempty"`
+	PackageSlug      string    `json:"package_slug,omitempty"`
+	Budget           string    `json:"budget,omitempty"`
+	Timeline         string    `json:"timeline,omitempty"`
+	Message          string    `json:"message,omitempty"`
+	Status           string    `json:"status"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 func QuoteOf(q *models.Quote) Quote {
@@ -266,6 +267,9 @@ func QuoteOf(q *models.Quote) Quote {
 	}
 	if q.TenantID != nil {
 		out.TenantID = q.TenantID.Hex()
+	}
+	if q.PromotedTenantID != nil {
+		out.PromotedTenantID = q.PromotedTenantID.Hex()
 	}
 	return out
 }
