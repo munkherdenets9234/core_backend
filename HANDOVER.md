@@ -137,6 +137,56 @@ No credential is required for `POST /api/v1/admin/login`, `/healthz`,
 `/readyz`, or `/.well-known/tenantcore`. Full detail, including exactly what
 each failure mode returns, is in `docs/api.json`'s `securitySchemes`.
 
+## Mail log (added 2026-10-08, uncommitted)
+
+Every email tenantcore sends is recorded, one row per send attempt, so an
+operator can answer "did the reset code go out?" without reading logs.
+
+- **Where:** all sends pass through `Mailer.Send` (`pkg/mailer/mailer.go`). A
+  recorder interface in `pkg/mailer/record.go` is implemented by
+  `internal/repository/maillog_repo.go` and wired in `internal/bootstrap`.
+  `internal/service/maillog_service.go` builds and sanitises the rows.
+- **Collection `mail_log`:** time (`created_at`), template name, recipient
+  address (stored in full), status `sent` or `failed`, a short error text on
+  failure, and the source: `system` (password reset, expiry notice) or the
+  service client name plus tenant id for sends from `POST /svc/notifications/email`.
+  A 30-day TTL index on `created_at` is created by `EnsureIndexes` at the next boot.
+- **Never stored:** the code, the message body, the subject or any template
+  data. The error text has every template data value of 3+ characters and
+  any API key or password replaced with `[redacted]`, is collapsed to one
+  line and cut to 200 characters.
+- **Writes never block a send.** A failed log insert is logged (redacted)
+  and the mail still goes out. A mailer that is not configured logs nothing.
+- **Route:** `GET /api/v1/admin/mail-log?status=&template=&page=&limit=`,
+  superadmin bearer only. `status` is `sent` or `failed`, `template` must be a
+  known template name (bad values answer 422). `limit` above 100 falls back
+  to 20, following `apictx.Page`. Documented in `docs/api.json`.
+- **Contract change:** `POST /svc/notifications/email` accepts an optional
+  `tenant_id` (24 hex characters). It only labels the log row.
+- **Tests:** `pkg/mailer/record_test.go`, `internal/service/maillog_service_test.go`,
+  `internal/repository/maillog_index_test.go`, `internal/api/admin/private/maillog_test.go`
+  and rows in `internal/api/guard_test.go`. `MailLogRepo.Record` and `List` have
+  no test, because that needs MongoDB.
+- **Console page:** see the admin handover (`/admin/mail-log`).
+
+## Local run notes (2026-10-08)
+
+- Run against `tenantcore_development` using this folder's own `.env`. The
+  `.env` says `APP_PORT=8092`. The template stack (`0. Template`) expects
+  tenantcore on 8090, so it was started with a process-level `APP_PORT=8090`
+  override. Nothing in `.env` was changed.
+- The binary was built outside the repo (`0. Template/.local/tenantcore.exe`,
+  `go build -o ... .`). `go build ./...` and the unit gate pass.
+- Development mail goes through Gmail SMTP (`GMAIL_EMAIL`/`GMAIL_PASSWORD`),
+  used only when `APP_ENV=development` and Brevo is not configured. Production
+  uses Brevo. A password-reset request for an address that is not a platform
+  user answers 200 and sends nothing (log line `password reset requested for
+  an unknown address`), by design.
+- `AGENTS.md` has a `## Databases` section: no database create/drop without
+  the owner's approval, test harnesses use `tpl_test_<random>`. The template
+  service's harness uses a fixed `tpl_test_run` instead (the dev MongoDB user
+  has no `dropDatabase` right), which differs from that rule.
+
 ## Current integration state (verified in this repo tree, not assumed)
 
 - **carwash IS wired to tenantcore.** `carwash/internal/entitlement/client.go`

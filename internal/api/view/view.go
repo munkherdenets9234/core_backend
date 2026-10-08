@@ -244,3 +244,33 @@ func SubscriptionOf(s *models.Subscription) Subscription {
 	}
 	return out
 }
+
+// MailLogEntry is one row of the console's mail log. There is no body or
+// subject here because none is ever stored.
+type MailLogEntry struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	Template  string    `json:"template"`
+	To        string    `json:"to"`
+	Status    string    `json:"status"`
+	Error     string    `json:"error,omitempty"`
+	Source    string    `json:"source"`
+	TenantID  string    `json:"tenant_id,omitempty"`
+}
+
+func MailLogOf(rows []*models.MailLog) []MailLogEntry {
+	out := make([]MailLogEntry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, MailLogEntry{
+			ID:        r.ID.Hex(),
+			CreatedAt: r.CreatedAt,
+			Template:  r.Template,
+			To:        r.To,
+			Status:    r.Status,
+			Error:     r.Error,
+			Source:    r.Source,
+			TenantID:  r.TenantID,
+		})
+	}
+	return out
+}

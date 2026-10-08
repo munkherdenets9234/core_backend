@@ -29,6 +29,7 @@ type Deps struct {
 	Quote         *service.QuoteService
 	TenantPlan    *service.TenantPlanService
 	SiteContent   *service.SiteContentService
+	MailLog       *service.MailLogService
 
 	AuthRateLimit gin.HandlerFunc
 }
@@ -57,6 +58,7 @@ func Register(base *gin.RouterGroup, d Deps) {
 		Quote:         d.Quote,
 		TenantPlan:    d.TenantPlan,
 		SiteContent:   d.SiteContent,
+		MailLog:       d.MailLog,
 		AuthRateLimit: d.AuthRateLimit,
 	})
 }
