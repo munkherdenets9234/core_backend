@@ -182,10 +182,13 @@ operator can answer "did the reset code go out?" without reading logs.
   uses Brevo. A password-reset request for an address that is not a platform
   user answers 200 and sends nothing (log line `password reset requested for
   an unknown address`), by design.
-- `AGENTS.md` has a `## Databases` section: no database create/drop without
-  the owner's approval, test harnesses use `tpl_test_<random>`. The template
-  service's harness uses a fixed `tpl_test_run` instead (the dev MongoDB user
-  has no `dropDatabase` right), which differs from that rule.
+- Hardening rule (`AGENTS.md`, `## Databases`): integration tests use one
+  fixed database, `tpl_test_run`, on the server named by `TEST_MONGO_URI`.
+  Never create other databases, never use a user-supplied or production name,
+  never call `Database.Drop` (the dev MongoDB user has no `dropDatabase`
+  right). The harness wipes `tpl_test_run` by dropping its collections once
+  per test process and refuses any other name. Any create, drop or alter
+  outside `tpl_test_run` needs the owner's explicit approval first.
 
 ## Current integration state (verified in this repo tree, not assumed)
 
