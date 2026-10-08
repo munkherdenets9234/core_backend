@@ -24,6 +24,7 @@ type Deps struct {
 	Quote         *service.QuoteService
 	TenantPlan    *service.TenantPlanService
 	SiteContent   *service.SiteContentService
+	MailLog       *service.MailLogService
 
 	// AuthRateLimit guards the password-changing routes, which take a
 	// current password as input and are therefore guessable.
@@ -36,6 +37,8 @@ func Register(base *gin.RouterGroup, d Deps) {
 	admins := &adminsController{svc: d.PlatformUser}
 	clients := &clientsController{svc: d.ServiceClient}
 	content := &contentController{showcase: d.Showcase, quotes: d.Quote, tenantPlan: d.TenantPlan, site: d.SiteContent}
+
+	mailLog := &mailLogController{svc: d.MailLog}
 
 	g := httpx.Wrap(base)
 
@@ -107,4 +110,8 @@ func Register(base *gin.RouterGroup, d Deps) {
 	sc.GET("", clients.List)
 	sc.POST("/:id/revoke", clients.Revoke)
 	sc.POST("/:id/rotate", clients.Rotate)
+
+	// What the mailer tried to send, newest first. Read-only: rows are
+	// written by the mailer itself and expire after 30 days.
+	g.GET("/mail-log", mailLog.List)
 }

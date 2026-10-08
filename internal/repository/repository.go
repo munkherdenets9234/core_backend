@@ -220,5 +220,14 @@ func indexSpecs() []indexSpec {
 			Keys:    bson.D{{Key: "expires_at", Value: 1}},
 			Options: options.Index().SetExpireAfterSeconds(3600),
 		}},
+
+		// The mail log deletes itself after 30 days. Not housekeeping: it
+		// holds recipient addresses, and a log nobody trims is a mailing
+		// list that grows in every backup. created_at is also the sort key
+		// of the console's list, so one index serves both.
+		{mailLogCollection, mongo.IndexModel{
+			Keys:    bson.D{{Key: "created_at", Value: -1}},
+			Options: options.Index().SetExpireAfterSeconds(int32(30 * 24 * time.Hour / time.Second)),
+		}},
 	}
 }

@@ -27,6 +27,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // DefaultEndpoint is Brevo's transactional send call.
@@ -51,6 +53,10 @@ type Config struct {
 	// Endpoint overrides DefaultEndpoint; tests point it at a local server.
 	Endpoint string
 	Timeout  time.Duration
+	// Recorder receives one Entry per send attempt (the mail log). Optional;
+	// nil records nothing. Log reports a failed write to it and may be nil.
+	Recorder Recorder
+	Log      *zap.Logger
 }
 
 // Mailer sends mail. A nil *Mailer is a valid "mail is not configured" value
@@ -127,10 +133,23 @@ func (m *Mailer) From() string {
 // a template that does not exist has a bug, and swallowing it would mean the
 // reset mail simply never arrives with nothing to say why.
 func (m *Mailer) Send(to string, tmpl Template, data map[string]string) error {
+	return m.SendFrom(System, to, tmpl, data)
+}
+
+// SendFrom is Send with the requester named, so the mail log can say whether
+// a message was tenantcore's own or sent for a product service. src never
+// reaches the message.
+func (m *Mailer) SendFrom(src Source, to string, tmpl Template, data map[string]string) error {
 	if !m.Available() {
 		return errors.New("mailer: not configured")
 	}
 	to = strings.TrimSpace(to)
+	err := m.send(to, tmpl, data)
+	m.record(src, tmpl, to, data, err)
+	return err
+}
+
+func (m *Mailer) send(to string, tmpl Template, data map[string]string) error {
 	if to == "" {
 		return errors.New("mailer: no recipient")
 	}

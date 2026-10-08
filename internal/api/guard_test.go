@@ -346,3 +346,22 @@ func TestResolveRequiresServiceKey(t *testing.T) {
 	assertRefused(t, e, http.MethodGet, path, map[string]string{"Authorization": "Bearer " + signed},
 		http.StatusUnauthorized, apierr.CodeUnauthorized)
 }
+
+// The mail log lists recipient addresses, so it is superadmin-only: no
+// credential gives 401, a tenant-scoped token gives 403.
+func TestMailLogRequiresASuperadminToken(t *testing.T) {
+	e, maker := testEngine(t)
+	const path = "/api/v1/admin/mail-log"
+
+	if publicRoutes["GET "+path] {
+		t.Fatal("mail-log must not be a public route")
+	}
+	assertRefused(t, e, http.MethodGet, path, nil, http.StatusUnauthorized, apierr.CodeUnauthorized)
+
+	signed, _, err := maker.Create("user-1", token.RoleTenantAdmin, "tenant-1", time.Hour)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	assertRefused(t, e, http.MethodGet, path, map[string]string{"Authorization": "Bearer " + signed},
+		http.StatusForbidden, apierr.CodeForbidden)
+}

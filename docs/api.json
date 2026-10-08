@@ -2873,6 +2873,11 @@
                       "reset_url": "https://admin.example.mn/reset?token=…",
                       "expires_in": "1 hour"
                     }
+                  },
+                  "tenant_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{24}$",
+                    "description": "Optional. The tenant this mail is for. Used only to label the entry in the mail log; it does not change what is sent."
                   }
                 }
               }
@@ -3076,6 +3081,97 @@
           },
           "429": {
             "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/mail-log": {
+      "get": {
+        "tags": [
+          "Platform Users"
+        ],
+        "operationId": "listMailLog",
+        "summary": "List mail send attempts, newest first",
+        "description": "Every email tenantcore tries to send leaves one row: time, template, recipient, `sent` or `failed`, a short scrubbed error on failure, and who asked (`system` for password reset and expiry notices, otherwise the service client name, with the tenant when it said). The code, subject, body and template data are never stored, so a one-time code cannot appear here. Rows delete themselves after 30 days. Read-only.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "sent",
+                "failed"
+              ]
+            },
+            "description": "Only rows with this status."
+          },
+          {
+            "name": "template",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "lead_notification",
+                "password_changed",
+                "password_reset",
+                "password_reset_code",
+                "request_notification",
+                "staff_invite",
+                "subscription_expiring"
+              ]
+            },
+            "description": "Only rows for this template."
+          },
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "description": "Page size, at most 100."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the mail log",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/MailLogEntry"
+                          }
+                        },
+                        "meta": {
+                          "$ref": "#/components/schemas/Meta"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
           }
         }
       }
@@ -4502,6 +4598,53 @@
         "additionalProperties": {
           "type": "object",
           "additionalProperties": true
+        }
+      },
+      "MailLogEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "template": {
+            "type": "string",
+            "enum": [
+              "lead_notification",
+              "password_changed",
+              "password_reset",
+              "password_reset_code",
+              "request_notification",
+              "staff_invite",
+              "subscription_expiring"
+            ]
+          },
+          "to": {
+            "type": "string",
+            "format": "email"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "sent",
+              "failed"
+            ]
+          },
+          "error": {
+            "type": "string",
+            "description": "Short, single-line, at most 200 characters. Present on failure only."
+          },
+          "source": {
+            "type": "string",
+            "description": "`system`, or the name of the service client that asked."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "Present when a service call named a tenant."
+          }
         }
       }
     }
