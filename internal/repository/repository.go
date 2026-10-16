@@ -221,6 +221,48 @@ func indexSpecs() []indexSpec {
 			Options: options.Index().SetExpireAfterSeconds(3600),
 		}},
 
+		// Domain records: a name belongs to one record anywhere, a tenant's
+		// list is read by tenant_id, and expiry reports by expires_at. The
+		// partial unique index is the backstop for "one primary per tenant".
+		{tenantDomainsCollection, mongo.IndexModel{
+			Keys:    bson.D{{Key: "name", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		}},
+		{tenantDomainsCollection, mongo.IndexModel{
+			Keys: bson.D{{Key: "tenant_id", Value: 1}},
+		}},
+		{tenantDomainsCollection, mongo.IndexModel{
+			Keys: bson.D{{Key: "expires_at", Value: 1}},
+		}},
+		{tenantDomainsCollection, mongo.IndexModel{
+			Keys: bson.D{{Key: "tenant_id", Value: 1}, {Key: "is_primary", Value: 1}},
+			Options: options.Index().SetName("tenant_primary_unique").SetUnique(true).
+				SetPartialFilterExpression(bson.M{"is_primary": true}),
+		}},
+
+		// Fees are read by tenant. Invoices carry a globally unique number
+		// (the sequence itself comes from an atomic counter; this index is
+		// the backstop) and are listed per tenant, newest first.
+		{tenantFeesCollection, mongo.IndexModel{
+			Keys: bson.D{{Key: "tenant_id", Value: 1}},
+		}},
+		{invoicesCollection, mongo.IndexModel{
+			Keys:    bson.D{{Key: "number", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		}},
+		{invoicesCollection, mongo.IndexModel{
+			Keys: bson.D{{Key: "tenant_id", Value: 1}, {Key: "created_at", Value: -1}},
+		}},
+		// One live invoice per fee period: period_keys holds a key per line
+		// and Void nulls it, so only non-void invoices with keys take part.
+		// The service also reads first (HasLine) for a clean message; this
+		// index closes the race between that read and the insert.
+		{invoicesCollection, mongo.IndexModel{
+			Keys: bson.D{{Key: "period_keys", Value: 1}},
+			Options: options.Index().SetName("invoice_period_keys_unique").SetUnique(true).
+				SetPartialFilterExpression(bson.M{"period_keys": bson.M{"$type": "string"}}),
+		}},
+
 		// The mail log deletes itself after 30 days. Not housekeeping: it
 		// holds recipient addresses, and a log nobody trims is a mailing
 		// list that grows in every backup. created_at is also the sort key

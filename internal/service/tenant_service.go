@@ -57,7 +57,15 @@ func NewTenantService(repo *repository.TenantRepo) *TenantService {
 // it makes "someone read the key out of the database" impossible and makes
 // "I lost the key" a two-minute job instead of an impossible one.
 func (s *TenantService) Create(ctx context.Context, t *models.Tenant) (*models.Tenant, string, error) {
-	t.Name = strings.TrimSpace(t.Name)
+	// Control and format characters (zero-width spaces, bidi marks) are
+	// removed before the required check, so a name of only invisible
+	// characters is "required", not stored (it would make invoices unsendable).
+	t.Name = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, t.Name))
 	t.Slug = strings.TrimSpace(t.Slug)
 	if t.Name == "" {
 		return nil, "", apierr.BadRequest("name is required")

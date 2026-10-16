@@ -154,12 +154,13 @@ func (m *Mailer) send(to string, tmpl Template, data map[string]string) error {
 		return errors.New("mailer: no recipient")
 	}
 
-	subject, body, err := render(tmpl, data)
+	subject, body, htmlBody, err := renderMail(tmpl, data)
 	if err != nil {
 		return err
 	}
 
 	p := buildPayload(m.cfg.FromName, m.cfg.FromAddress, to, subject, body)
+	p.HTMLContent = htmlBody
 	if m.cfg.APIKey == "" {
 		return m.deliverSMTP(to, p)
 	}
@@ -172,6 +173,8 @@ type payload struct {
 	To          []address `json:"to"`
 	Subject     string    `json:"subject"`
 	TextContent string    `json:"textContent"`
+	// HTMLContent is set only by templates that have an HTML body (invoice).
+	HTMLContent string `json:"htmlContent,omitempty"`
 }
 
 type address struct {

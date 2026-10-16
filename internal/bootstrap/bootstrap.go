@@ -125,11 +125,20 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 	}
 
 	tenantSvc := service.NewTenantService(tenants)
+	domainRepo := repository.NewTenantDomainRepo(db)
+	feeRepo := repository.NewTenantFeeRepo(db)
+	subscriptionSvc := service.NewSubscriptionService(subscriptions, plans)
 	limiter := middleware.NewRateLimiter()
 	mailLog := repository.NewMailLogRepo(db)
 	mail := buildMailer(cfg, log, mailLog)
 	passwordResetSvc := service.NewPasswordResetService(platformUsers, passwordResets, mail, log)
 	promoteSvc := service.NewPromoteService(quotes, tenantSvc, platformUsers, mail, service.AppName, log)
+
+	feeSvc := service.NewFeeService(feeRepo, domainRepo, subscriptionSvc, tenants)
+	paymentSettingsSvc := service.NewPaymentSettingsService(repository.NewPaymentSettingsRepo(db))
+	invoiceRepo := repository.NewInvoiceRepo(db)
+	feeSvc.SetInvoiceSource(invoiceRepo)
+	invoiceSvc := service.NewInvoiceService(invoiceRepo, feeSvc, feeRepo, domainRepo, tenants, mail, paymentSettingsSvc, service.AppName)
 
 	srv := api.NewServer(api.Deps{
 		Config: cfg,
@@ -142,19 +151,23 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 		PublicKeyB64: maker.PublicKeyB64(),
 		KeyID:        maker.KeyID(),
 
-		Tenant:        tenantSvc,
-		Plan:          service.NewPlanService(plans),
-		Subscription:  service.NewSubscriptionService(subscriptions, plans),
-		PlatformUser:  platformUserSvc,
-		PasswordReset: passwordResetSvc,
-		ServiceClient: service.NewServiceClientService(serviceClients),
-		Entitlement:   service.NewEntitlementService(tenants, subscriptions, plans),
-		Showcase:      service.NewShowcaseService(tenantDetails, tenants),
-		Quote:         service.NewQuoteService(quotes),
-		TenantPlan:    service.NewTenantPlanService(tenantPlans, plans, tenants),
-		SiteContent:   service.NewSiteContentService(siteContent),
-		Promote:       promoteSvc,
-		MailLog:       service.NewMailLogService(mailLog),
+		Tenant:          tenantSvc,
+		Plan:            service.NewPlanService(plans),
+		Subscription:    subscriptionSvc,
+		PlatformUser:    platformUserSvc,
+		PasswordReset:   passwordResetSvc,
+		ServiceClient:   service.NewServiceClientService(serviceClients),
+		Entitlement:     service.NewEntitlementService(tenants, subscriptions, plans),
+		Showcase:        service.NewShowcaseService(tenantDetails, tenants),
+		Quote:           service.NewQuoteService(quotes),
+		TenantPlan:      service.NewTenantPlanService(tenantPlans, plans, tenants),
+		SiteContent:     service.NewSiteContentService(siteContent),
+		Promote:         promoteSvc,
+		MailLog:         service.NewMailLogService(mailLog),
+		Domain:          service.NewDomainService(domainRepo, tenants, feeRepo),
+		Fee:             feeSvc,
+		Invoice:         invoiceSvc,
+		PaymentSettings: paymentSettingsSvc,
 	})
 
 	// The verifying key is logged at startup so it can be copied into a

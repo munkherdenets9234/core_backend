@@ -18,19 +18,23 @@ import (
 type Deps struct {
 	Auth *middleware.Auth
 
-	Tenant        *service.TenantService
-	Plan          *service.PlanService
-	Subscription  *service.SubscriptionService
-	PlatformUser  *service.PlatformUserService
-	PasswordReset *service.PasswordResetService
-	ServiceClient *service.ServiceClientService
-	Entitlement   *service.EntitlementService
-	Showcase      *service.ShowcaseService
-	Quote         *service.QuoteService
-	TenantPlan    *service.TenantPlanService
-	SiteContent   *service.SiteContentService
-	Promote       *service.PromoteService
-	MailLog       *service.MailLogService
+	Tenant          *service.TenantService
+	Plan            *service.PlanService
+	Subscription    *service.SubscriptionService
+	PlatformUser    *service.PlatformUserService
+	PasswordReset   *service.PasswordResetService
+	ServiceClient   *service.ServiceClientService
+	Entitlement     *service.EntitlementService
+	Showcase        *service.ShowcaseService
+	Quote           *service.QuoteService
+	TenantPlan      *service.TenantPlanService
+	SiteContent     *service.SiteContentService
+	Promote         *service.PromoteService
+	MailLog         *service.MailLogService
+	Domain          *service.DomainService
+	Fee             *service.FeeService
+	Invoice         *service.InvoiceService
+	PaymentSettings *service.PaymentSettingsService
 
 	AuthRateLimit gin.HandlerFunc
 }
@@ -49,18 +53,22 @@ func Register(base *gin.RouterGroup, d Deps) {
 	priv := base.Group("", d.Auth.Require(token.RoleSuperadmin))
 
 	privateapi.Register(priv, privateapi.Deps{
-		Tenant:        d.Tenant,
-		Plan:          d.Plan,
-		Subscription:  d.Subscription,
-		PlatformUser:  d.PlatformUser,
-		ServiceClient: d.ServiceClient,
-		Entitlement:   d.Entitlement,
-		Showcase:      d.Showcase,
-		Quote:         d.Quote,
-		TenantPlan:    d.TenantPlan,
-		SiteContent:   d.SiteContent,
-		Promote:       d.Promote,
-		MailLog:       d.MailLog,
-		AuthRateLimit: d.AuthRateLimit,
+		Tenant:          d.Tenant,
+		Plan:            d.Plan,
+		Subscription:    d.Subscription,
+		PlatformUser:    d.PlatformUser,
+		ServiceClient:   d.ServiceClient,
+		Entitlement:     d.Entitlement,
+		Showcase:        d.Showcase,
+		Quote:           d.Quote,
+		TenantPlan:      d.TenantPlan,
+		SiteContent:     d.SiteContent,
+		Promote:         d.Promote,
+		MailLog:         d.MailLog,
+		Domain:          d.Domain,
+		Fee:             d.Fee,
+		Invoice:         d.Invoice,
+		PaymentSettings: d.PaymentSettings,
+		AuthRateLimit:   d.AuthRateLimit,
 	})
 }

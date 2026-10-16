@@ -1,10 +1,15 @@
 package mailer
 
 import (
+	"bytes"
 	"crypto/tls"
 	"fmt"
+	"mime"
+	"mime/multipart"
+	"mime/quotedprintable"
 	"net"
 	"net/smtp"
+	"net/textproto"
 	"strings"
 	"time"
 )
@@ -20,6 +25,9 @@ const (
 // deliverSMTP sends one message over STARTTLS SMTP.
 func (m *Mailer) deliverSMTP(to string, p payload) error {
 	msg := buildMessage(p.Sender.Name, p.Sender.Email, to, p.Subject, p.TextContent)
+	if p.HTMLContent != "" {
+		msg = buildMessageAlternative(p.Sender.Name, p.Sender.Email, to, p.Subject, p.TextContent, p.HTMLContent)
+	}
 	addr := net.JoinHostPort(m.cfg.Host, fmt.Sprint(m.cfg.Port))
 
 	// Dial with a timeout rather than smtp.SendMail, which uses no deadline
@@ -76,20 +84,65 @@ func (m *Mailer) deliverSMTP(to string, p payload) error {
 // not, and multipart assembly is a class of bug (boundary handling, encoding)
 // with no upside for a six-line message.
 func buildMessage(fromName, fromAddr, to, subject, body string) []byte {
+	return buildMessageType("text/plain", fromName, fromAddr, to, subject, body)
+}
+
+// buildMessageType is buildMessage with the content type chosen by the
+// caller: text/html for the development SMTP path of an HTML-bodied template.
+func buildMessageType(contentType, fromName, fromAddr, to, subject, body string) []byte {
 	var b strings.Builder
-	b.WriteString("From: " + encodeHeader(fromName) + " <" + fromAddr + ">\r\n")
-	b.WriteString("To: " + encodeHeader(to) + "\r\n")
-	b.WriteString("Subject: " + encodeHeader(subject) + "\r\n")
-	b.WriteString("Date: " + time.Now().Format(time.RFC1123Z) + "\r\n")
-	b.WriteString("MIME-Version: 1.0\r\n")
-	b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+	writeHeaders(&b, fromName, fromAddr, to, subject)
+	b.WriteString("Content-Type: " + contentType + "; charset=UTF-8\r\n")
 	b.WriteString("Content-Transfer-Encoding: 8bit\r\n")
-	// Reset mail is not a newsletter; keep it out of Promotions and out of
-	// automatic replies.
-	b.WriteString("Auto-Submitted: auto-generated\r\n")
 	b.WriteString("\r\n")
 	b.WriteString(normalizeNewlines(body))
 	return []byte(b.String())
+}
+
+// buildMessageAlternative assembles a multipart/alternative message with a
+// text part and an HTML part (the last, preferred one), both
+// quoted-printable. QP encoding keeps every line far below RFC 5322's 998
+// characters whatever the HTML looks like, and is safe for non-ASCII text.
+func buildMessageAlternative(fromName, fromAddr, to, subject, text, htmlBody string) []byte {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	for _, part := range []struct{ ctype, content string }{
+		{"text/plain", text}, {"text/html", htmlBody},
+	} {
+		h := textproto.MIMEHeader{}
+		h.Set("Content-Type", part.ctype+"; charset=UTF-8")
+		h.Set("Content-Transfer-Encoding", "quoted-printable")
+		pw, err := mw.CreatePart(h)
+		if err != nil {
+			break // writing to a bytes.Buffer cannot fail
+		}
+		qw := quotedprintable.NewWriter(pw)
+		_, _ = qw.Write([]byte(normalizeNewlines(part.content)))
+		_ = qw.Close()
+	}
+	_ = mw.Close()
+
+	var b strings.Builder
+	writeHeaders(&b, fromName, fromAddr, to, subject)
+	b.WriteString("Content-Type: multipart/alternative; boundary=\"" + mw.Boundary() + "\"\r\n")
+	b.WriteString("\r\n")
+	b.WriteString(body.String())
+	return []byte(b.String())
+}
+
+// writeHeaders writes the headers every message shares. Values pass through
+// encodeHeader, so none can start a new header line.
+func writeHeaders(b *strings.Builder, fromName, fromAddr, to, subject string) {
+	b.WriteString("From: " + encodeHeader(fromName) + " <" + fromAddr + ">\r\n")
+	b.WriteString("To: " + encodeHeader(to) + "\r\n")
+	// A non-ASCII subject (the invoice one is Mongolian) goes out as an
+	// RFC 2047 encoded word; pure ASCII passes through unchanged.
+	b.WriteString("Subject: " + mime.QEncoding.Encode("UTF-8", encodeHeader(subject)) + "\r\n")
+	b.WriteString("Date: " + time.Now().Format(time.RFC1123Z) + "\r\n")
+	b.WriteString("MIME-Version: 1.0\r\n")
+	// Reset mail is not a newsletter; keep it out of Promotions and out of
+	// automatic replies.
+	b.WriteString("Auto-Submitted: auto-generated\r\n")
 }
 
 // normalizeNewlines converts bare LF to CRLF as SMTP requires, without

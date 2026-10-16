@@ -53,12 +53,13 @@ func (h *notificationsController) Send(c *gin.Context) error {
 
 	var req sendEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		return apierr.BadRequest(err.Error())
+		// Fixed text: binder errors can echo field names and submitted values.
+		return apierr.BadRequest("invalid request")
 	}
 
-	tmpl, ok := mailer.Known(req.Template)
+	tmpl, ok := mailer.KnownForService(req.Template)
 	if !ok {
-		return apierr.BadRequest("unknown template: " + req.Template)
+		return apierr.BadRequest("unknown template")
 	}
 
 	// Named so the mail log can say which service asked, and for whom.

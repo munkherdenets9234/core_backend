@@ -32,19 +32,23 @@ type Deps struct {
 	PublicKeyB64 string
 	KeyID        string
 
-	Tenant        *service.TenantService
-	Plan          *service.PlanService
-	Subscription  *service.SubscriptionService
-	PlatformUser  *service.PlatformUserService
-	PasswordReset *service.PasswordResetService
-	ServiceClient *service.ServiceClientService
-	Entitlement   *service.EntitlementService
-	Showcase      *service.ShowcaseService
-	Quote         *service.QuoteService
-	TenantPlan    *service.TenantPlanService
-	SiteContent   *service.SiteContentService
-	Promote       *service.PromoteService
-	MailLog       *service.MailLogService
+	Tenant          *service.TenantService
+	Plan            *service.PlanService
+	Subscription    *service.SubscriptionService
+	PlatformUser    *service.PlatformUserService
+	PasswordReset   *service.PasswordResetService
+	ServiceClient   *service.ServiceClientService
+	Entitlement     *service.EntitlementService
+	Showcase        *service.ShowcaseService
+	Quote           *service.QuoteService
+	TenantPlan      *service.TenantPlanService
+	SiteContent     *service.SiteContentService
+	Promote         *service.PromoteService
+	MailLog         *service.MailLogService
+	Domain          *service.DomainService
+	Fee             *service.FeeService
+	Invoice         *service.InvoiceService
+	PaymentSettings *service.PaymentSettingsService
 }
 
 type Server struct {
