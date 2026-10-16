@@ -3242,6 +3242,7 @@
             "schema": {
               "type": "string",
               "enum": [
+                "invoice",
                 "lead_notification",
                 "password_changed",
                 "password_reset",
@@ -3296,6 +3297,1399 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/domains": {
+      "get": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "listTenantDomains",
+        "summary": "List a tenant's domain records",
+        "description": "Superadmin only. Ownership, DNS, hosting and expiry bookkeeping; never feeds routing or auth.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's domains",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/TenantDomain"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "createTenantDomain",
+        "summary": "Add a domain record to a tenant",
+        "description": "Max 50 domains per tenant. The name is unique across all tenants (409).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantDomainRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TenantDomain"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The domain name is already registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/domains/{domainId}": {
+      "get": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "getTenantDomain",
+        "summary": "Get one domain record",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          },
+          {
+            "name": "domainId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Domain record id. A domain of another tenant is a 404."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The domain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TenantDomain"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "updateTenantDomain",
+        "summary": "Replace a domain record's editable fields",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          },
+          {
+            "name": "domainId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Domain record id. A domain of another tenant is a 404."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantDomainRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TenantDomain"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The domain name is already registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "deleteTenantDomain",
+        "summary": "Delete a domain record",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          },
+          {
+            "name": "domainId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Domain record id. A domain of another tenant is a 404."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "deleted": {
+                              "type": "boolean"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/fees": {
+      "get": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "listTenantFees",
+        "summary": "List a tenant's fees",
+        "description": "Superadmin only. Stored fees (domain, deployment, other). The subscription line is derived and appears only in costing.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's fees",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/TenantFee"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "createTenantFee",
+        "summary": "Add a fee to a tenant",
+        "description": "Max 100 fees per tenant. Kind `subscription` is rejected: that line is derived from the plan. A domain fee must link a domain of the same tenant.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantFeeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TenantFee"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/fees/{feeId}": {
+      "put": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "updateTenantFee",
+        "summary": "Replace a fee's editable fields",
+        "description": "last_invoiced_through is kept when omitted.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          },
+          {
+            "name": "feeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Fee id. A fee of another tenant is a 404."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantFeeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TenantFee"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "deleteTenantFee",
+        "summary": "Delete a fee",
+        "description": "Invoices already made keep their line snapshots.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          },
+          {
+            "name": "feeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Fee id. A fee of another tenant is a 404."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "deleted": {
+                              "type": "boolean"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/costing": {
+      "get": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "getTenantCosting",
+        "summary": "What a tenant owes and when",
+        "description": "Superadmin only. Stored fees with next_due_at and a due flag (due = active and next_due_at within lead_days of now, or past), the subscription line derived from the tenant's subscription and plan at read time (price rounded once to whole MNT), and the total of the due lines. A domain fee is due at the linked domain's expires_at.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Costing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TenantCosting"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/invoices": {
+      "get": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "listTenantInvoices",
+        "summary": "List a tenant's invoices, newest first",
+        "description": "Superadmin only.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's invoices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Invoice"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "createTenantInvoice",
+        "summary": "Create a draft invoice",
+        "description": "The client names lines (fee ids, `subscription` for the derived line, or all_due) and may give a tax rate and due date. Line labels and amounts, number (INV-YYYY-MM-NNN, sequential per month; older invoices carry INV-YYYY-NNNN), subtotal, tax_amount and total are computed on the server. A line already on a non-void invoice for the same period is a 409 whose message names that invoice (`a line is already on invoice INV-... for this period`). With all_due, lines already on an invoice are skipped; it is a 409 only when every due line is already invoiced. Costing marks such lines with `invoiced_on`. Optional `discounts` give per-line discounts keyed by selection id; subtotal stays the gross sum, tax is computed on subtotal minus discount_total and total is that base plus tax.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created (status draft)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Invoice"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "A selected line is already on a non-void invoice for the same period, or the invoice number was taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/invoices/{invId}": {
+      "get": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "getTenantInvoice",
+        "summary": "Get one invoice",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          },
+          {
+            "name": "invId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Invoice id. An invoice of another tenant is a 404."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Invoice"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "editTenantInvoice",
+        "summary": "Edit a draft invoice",
+        "description": "Changes the due date, the tax rate and/or the line discounts of a draft invoice; at least one is required and due_at cannot be null. due_at must not be before the issue date. A new tax_rate_bp (0..10000) or a discounts change recomputes discount_total, tax_amount and total on the server from the stored lines; line labels, amounts, periods, number, issue date, currency and period keys never change. Discounts are keyed by line_key and may set or clear a line's discount (see LineDiscount). Only a draft can be edited: sent, paid, void and an invoice being sent are refused (409). The update is conditional on the draft status, so a concurrent send, void or paid wins and the edit is a 409. An invoice of another tenant is a 404.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          },
+          {
+            "name": "invId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Invoice id. An invoice of another tenant is a 404."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceEditRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated invoice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Invoice"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The invoice is not a draft (or changed while it was being edited)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "deleteTenantInvoice",
+        "summary": "Delete a draft invoice",
+        "description": "Removes a draft invoice and frees its fee periods to be invoiced again. Only a draft can be deleted: sent, paid, void and an invoice being sent are refused (409). The delete is conditional on the draft status, so a concurrent send wins. The invoice number counter is not rolled back; numbers may have gaps. An invoice of another tenant is a 404.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          },
+          {
+            "name": "invId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Invoice id. An invoice of another tenant is a 404."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "deleted": {
+                              "type": "boolean"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The invoice is not a draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/invoices/{invId}/preview": {
+      "get": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "previewTenantInvoice",
+        "summary": "Preview the invoice mail",
+        "description": "Renders the invoice mail (Mongolian template) with the same renderer Send uses, from the invoice and the current payment settings (an invoice's own snapshot wins where it has the field). Works in any status. Sends nothing and changes nothing. 409 while the payment settings are not configured. An invoice of another tenant is a 404. Superadmin only.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          },
+          {
+            "name": "invId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Invoice id. An invoice of another tenant is a 404."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rendered mail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/InvoicePreview"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/invoices/{invId}/send": {
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "sendTenantInvoice",
+        "summary": "Email the invoice to the tenant's contact address",
+        "description": "The recipient is the tenant's contact_email, resolved on the server; the request cannot name one. Sends the fixed `invoice` mail template (HTML with a plain text alternative). A draft is sent; a sent invoice needs {\"resend\": true}; paid and void are refused (409). With email off the answer is 503 and the status is unchanged. On success status is sent and sent_at/sent_to are set. Sending needs the platform payment settings to be configured (409 otherwise; the status is unchanged). The settings are snapshotted onto the invoice as payment_instructions at the first send and kept on resend (added only when absent); the email (Mongolian template) carries the issuer details and a payment block whose transfer description is the invoice number; the snapshot also holds the issuer company fields.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          },
+          {
+            "name": "invId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Invoice id. An invoice of another tenant is a 404."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoiceSendRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Invoice"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Already sent (set resend), paid or void, or the payment settings are not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "502": {
+            "description": "The mail provider refused the message; the status is unchanged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Email is not configured on this deployment; the status is unchanged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/invoices/{invId}/paid": {
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "markTenantInvoicePaid",
+        "summary": "Mark a sent invoice paid",
+        "description": "Only a sent invoice can be marked paid (409 otherwise). Sets paid_at, and for deployment and other fee lines advances the fee's last_invoiced_through to the period billed. For each domain line it sets the domain's client_charge paid_at to now and paid_through to the expires_at date that was billed (today + 365 days when the domain had none), never moving paid_through backwards; method (bank_transfer is stored as bank) and reference are copied from the transaction record when given. The subscription line advances nothing. paid is terminal. The optional body records the transaction (see InvoicePaidRequest); it is stored as payment and paid_at is the given payment date.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          },
+          {
+            "name": "invId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Invoice id. An invoice of another tenant is a 404."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Invoice"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body or a rejected value (fixed message: invalid paid date, payment method, reference, payer name, payer account last4, note, or amount received must equal the invoice total)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Not in the sent status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvoicePaidRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/invoices/{invId}/void": {
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "voidTenantInvoice",
+        "summary": "Void a draft or sent invoice",
+        "description": "Frees its fee periods to be invoiced again. paid and void are terminal (409).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          },
+          {
+            "name": "invId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Invoice id. An invoice of another tenant is a 404."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Void",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Invoice"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Already paid or void",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/domains/{domainId}/registrar-paid": {
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "markTenantDomainRegistrarPaid",
+        "summary": "Settle a domain's registrar cost",
+        "description": "Records that the registrar cost was paid: sets registrar_cost.paid_at, paid_through, payer and optionally method and reference. The amount is untouched. A domain of another tenant is a 404. Registrar costs are never invoiced to the tenant.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          },
+          {
+            "name": "domainId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Domain record id. A domain of another tenant is a 404."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistrarPaidRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated domain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TenantDomain"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/payment-settings": {
+      "get": {
+        "tags": [
+          "Platform Users"
+        ],
+        "operationId": "getPaymentSettings",
+        "summary": "Get the platform payment settings",
+        "description": "The platform's own bank details printed on invoices. Superadmin only. Returns an empty object with configured false when nothing was saved.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/PaymentSettings"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Platform Users"
+        ],
+        "operationId": "putPaymentSettings",
+        "summary": "Replace the platform payment settings",
+        "description": "Full replace (upsert) of the single settings document. Superadmin only. Invoices cannot be sent (or previewed) until company_name, bank_name, account_name and account_number are set.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentSettingsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/PaymentSettings"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -4747,6 +6141,7 @@
           "template": {
             "type": "string",
             "enum": [
+              "invoice",
               "lead_notification",
               "password_changed",
               "password_reset",
@@ -4778,6 +6173,1403 @@
           "tenant_id": {
             "type": "string",
             "description": "Present when a service call named a tenant."
+          }
+        }
+      },
+      "TenantDomainRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Domain name; canonicalised server-side (lowercase, IDNA). Unique across all tenants."
+          },
+          "is_primary": {
+            "type": "boolean",
+            "description": "At most one per tenant; setting it demotes the previous primary."
+          },
+          "registrant_name": {
+            "type": "string"
+          },
+          "registrant_owner": {
+            "type": "string",
+            "enum": [
+              "",
+              "us",
+              "client"
+            ]
+          },
+          "registrar": {
+            "type": "string"
+          },
+          "registrar_account_email": {
+            "type": "string"
+          },
+          "dns_provider": {
+            "type": "string"
+          },
+          "dns_provider_email": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "auto_renew": {
+            "type": "boolean"
+          },
+          "registrar_lock": {
+            "type": "boolean"
+          },
+          "subdomains": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "purpose": {
+                  "type": "string",
+                  "enum": [
+                    "app",
+                    "api",
+                    "admin",
+                    "other"
+                  ]
+                },
+                "target": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "deployment": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "provider_email": {
+                "type": "string"
+              },
+              "environment": {
+                "type": "string",
+                "enum": [
+                  "",
+                  "prod",
+                  "staging"
+                ]
+              },
+              "region": {
+                "type": "string"
+              },
+              "resource_id": {
+                "type": "string"
+              },
+              "address": {
+                "type": "string"
+              },
+              "dns_target": {
+                "type": "string"
+              }
+            }
+          },
+          "dns_verified": {
+            "type": "boolean"
+          },
+          "dns_checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "ssl_provider": {
+            "type": "string"
+          },
+          "ssl_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "tech_contact_email": {
+            "type": "string"
+          },
+          "billing_contact_email": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "payment": {
+            "type": "object",
+            "description": "Both sides of the domain's money. PUT replaces it; omitted means empty. Status fields are output only and ignored if sent.",
+            "properties": {
+              "client_charge": {
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0,
+                    "maximum": 1000000000000,
+                    "description": "What the client is charged, whole MNT."
+                  },
+                  "paid_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  },
+                  "paid_through": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time",
+                    "description": "The date the paid period covers up to. Must not be before paid_at."
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "",
+                      "cash",
+                      "bank",
+                      "card",
+                      "other"
+                    ]
+                  },
+                  "reference": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                }
+              },
+              "registrar_cost": {
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0,
+                    "maximum": 1000000000000,
+                    "description": "What the registrar charges, whole MNT. Never put on a tenant invoice."
+                  },
+                  "paid_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  },
+                  "paid_through": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time",
+                    "description": "The date the paid period covers up to. Must not be before paid_at."
+                  },
+                  "payer": {
+                    "type": "string",
+                    "enum": [
+                      "",
+                      "us",
+                      "client"
+                    ]
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "",
+                      "cash",
+                      "bank",
+                      "card",
+                      "other"
+                    ]
+                  },
+                  "reference": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                }
+              }
+            }
+          }
+        },
+        "description": "Editable fields of a domain record. Emails are validated, strings are length-capped, subdomain names are canonicalised. Bookkeeping only: never feeds routing or API-key binding."
+      },
+      "TenantDomain": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Domain name; canonicalised server-side (lowercase, IDNA). Unique across all tenants."
+          },
+          "is_primary": {
+            "type": "boolean",
+            "description": "At most one per tenant; setting it demotes the previous primary."
+          },
+          "registrant_name": {
+            "type": "string"
+          },
+          "registrant_owner": {
+            "type": "string",
+            "enum": [
+              "",
+              "us",
+              "client"
+            ]
+          },
+          "registrar": {
+            "type": "string"
+          },
+          "registrar_account_email": {
+            "type": "string"
+          },
+          "dns_provider": {
+            "type": "string"
+          },
+          "dns_provider_email": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "auto_renew": {
+            "type": "boolean"
+          },
+          "registrar_lock": {
+            "type": "boolean"
+          },
+          "subdomains": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "purpose": {
+                  "type": "string",
+                  "enum": [
+                    "app",
+                    "api",
+                    "admin",
+                    "other"
+                  ]
+                },
+                "target": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "deployment": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "provider_email": {
+                "type": "string"
+              },
+              "environment": {
+                "type": "string",
+                "enum": [
+                  "",
+                  "prod",
+                  "staging"
+                ]
+              },
+              "region": {
+                "type": "string"
+              },
+              "resource_id": {
+                "type": "string"
+              },
+              "address": {
+                "type": "string"
+              },
+              "dns_target": {
+                "type": "string"
+              }
+            }
+          },
+          "dns_verified": {
+            "type": "boolean"
+          },
+          "dns_checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "ssl_provider": {
+            "type": "string"
+          },
+          "ssl_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "tech_contact_email": {
+            "type": "string"
+          },
+          "billing_contact_email": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "payment": {
+            "type": "object",
+            "description": "Both sides of the domain's money, with derived statuses.",
+            "properties": {
+              "client_charge": {
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0,
+                    "maximum": 1000000000000,
+                    "description": "What the client is charged, whole MNT."
+                  },
+                  "paid_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  },
+                  "paid_through": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time",
+                    "description": "The date the paid period covers up to. Must not be before paid_at."
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "",
+                      "cash",
+                      "bank",
+                      "card",
+                      "other"
+                    ]
+                  },
+                  "reference": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "paid",
+                      "unpaid"
+                    ],
+                    "description": "Derived, never stored: none when amount is 0; paid when paid_through is on or after the domain's expires_at (UTC date compare); unpaid otherwise. Moving expires_at forward makes it unpaid again."
+                  }
+                }
+              },
+              "registrar_cost": {
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0,
+                    "maximum": 1000000000000,
+                    "description": "What the registrar charges, whole MNT. Never put on a tenant invoice."
+                  },
+                  "paid_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  },
+                  "paid_through": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time",
+                    "description": "The date the paid period covers up to. Must not be before paid_at."
+                  },
+                  "payer": {
+                    "type": "string",
+                    "enum": [
+                      "",
+                      "us",
+                      "client"
+                    ]
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "",
+                      "cash",
+                      "bank",
+                      "card",
+                      "other"
+                    ]
+                  },
+                  "reference": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "paid",
+                      "unpaid"
+                    ],
+                    "description": "Derived, never stored: none when amount is 0; paid when paid_through is on or after the domain's expires_at (UTC date compare); unpaid otherwise. Moving expires_at forward makes it unpaid again."
+                  }
+                }
+              },
+              "margin": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "client_charge.amount minus registrar_cost.amount; null unless both are above 0."
+              }
+            }
+          }
+        }
+      },
+      "TenantFeeRequest": {
+        "type": "object",
+        "required": [
+          "kind",
+          "label",
+          "interval"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "domain",
+              "deployment",
+              "other"
+            ],
+            "description": "`subscription` is derived from the plan and rejected here."
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 1000000000000,
+            "description": "Whole MNT."
+          },
+          "interval": {
+            "type": "string",
+            "enum": [
+              "monthly",
+              "yearly",
+              "one_time"
+            ]
+          },
+          "domain_id": {
+            "type": "string",
+            "description": "Required for kind domain: a domain record of the same tenant. Forbidden otherwise."
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Defaults to true."
+          },
+          "last_invoiced_through": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "End of the last invoiced period. Kept when omitted on update."
+          }
+        }
+      },
+      "TenantFee": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "domain",
+              "deployment",
+              "other"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Whole MNT. For a domain fee whose linked domain has client_charge.amount above 0, costing reports that charge instead."
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "MNT"
+            ]
+          },
+          "interval": {
+            "type": "string",
+            "enum": [
+              "monthly",
+              "yearly",
+              "one_time"
+            ]
+          },
+          "domain_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "last_invoiced_through": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TenantFeeCosting": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TenantFee"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "next_due_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time",
+                "description": "Domain fee: the linked domain's expires_at. Otherwise last_invoiced_through plus the interval (or creation, if never invoiced). Null when nothing is owed."
+              },
+              "due": {
+                "type": "boolean",
+                "description": "Active and next_due_at within lead_days of now (or past)."
+              },
+              "domain_name": {
+                "type": "string"
+              },
+              "payment_status": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "paid",
+                  "unpaid"
+                ],
+                "description": "Client charge status of the linked domain (domain fees only). unpaid means due now, whatever the lead window."
+              },
+              "invoiced_on": {
+                "type": "string",
+                "description": "Number of the draft, sent or paid invoice of this tenant that already bills this line's current period; omitted when none does. Selecting such a line in an invoice request is a 409 naming that invoice."
+              }
+            }
+          }
+        ]
+      },
+      "TenantCosting": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "enum": [
+              "MNT"
+            ]
+          },
+          "lead_days": {
+            "type": "integer",
+            "description": "The due window, in days."
+          },
+          "fees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TenantFeeCosting"
+            }
+          },
+          "subscription": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Derived from the tenant's subscription and plan; not stored. Null without a subscription or plan. Select it in an invoice request with the id `subscription`.",
+            "properties": {
+              "id": {
+                "type": "string",
+                "enum": [
+                  "subscription"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "amount": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Plan price rounded once to whole MNT."
+              },
+              "currency": {
+                "type": "string",
+                "enum": [
+                  "MNT"
+                ]
+              },
+              "plan_name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "next_due_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "due": {
+                "type": "boolean"
+              },
+              "invoiced_on": {
+                "type": "string",
+                "description": "Number of the live (draft, sent or paid) invoice already billing this period; omitted when none."
+              }
+            }
+          },
+          "due_total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of every due line, subscription and domain lines included. Registrar costs are never in it."
+          },
+          "domain_lines": {
+            "type": "array",
+            "description": "Derived domain lines: a domain with a client charge above 0 that no fee row bills. Select one in an invoice request with its id `domain:<domainId>`. Due while unpaid.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "domain_id": {
+                  "type": "string"
+                },
+                "domain_name": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "currency": {
+                  "type": "string",
+                  "enum": [
+                    "MNT"
+                  ]
+                },
+                "payment_status": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "paid",
+                    "unpaid"
+                  ]
+                },
+                "next_due_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "due": {
+                  "type": "boolean"
+                },
+                "invoiced_on": {
+                  "type": "string",
+                  "description": "Number of the live (draft, sent or paid) invoice already billing this period; omitted when none."
+                }
+              }
+            }
+          },
+          "payables": {
+            "type": "object",
+            "description": "The money side of the domains that is not on an invoice.",
+            "properties": {
+              "items": {
+                "type": "array",
+                "description": "Domains whose registrar cost is unpaid.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "domain_id": {
+                      "type": "string"
+                    },
+                    "domain_name": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "expires_at": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time"
+                    },
+                    "payer": {
+                      "type": "string",
+                      "enum": [
+                        "",
+                        "us",
+                        "client"
+                      ]
+                    },
+                    "margin": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "format": "int64"
+                    }
+                  }
+                }
+              },
+              "margins": {
+                "type": "array",
+                "description": "client_charge.amount minus registrar_cost.amount for each domain where both are above 0.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "domain_id": {
+                      "type": "string"
+                    },
+                    "domain_name": {
+                      "type": "string"
+                    },
+                    "margin": {
+                      "type": "integer",
+                      "format": "int64"
+                    }
+                  }
+                }
+              },
+              "receivable_total": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Sum of the unpaid client charges of all domains."
+              },
+              "payable_total": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Sum of the unpaid registrar costs of all domains, whoever the payer is."
+              }
+            }
+          }
+        }
+      },
+      "InvoiceRequest": {
+        "type": "object",
+        "properties": {
+          "fee_ids": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "string"
+            },
+            "description": "Fee ids, `subscription` and/or derived domain line ids (`domain:<domainId>`)."
+          },
+          "all_due": {
+            "type": "boolean",
+            "description": "Also include every due line."
+          },
+          "tax_rate_bp": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000,
+            "description": "Optional tax rate in basis points (1000 = 10%)."
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Optional; not before today."
+          },
+          "discounts": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/LineDiscount"
+            },
+            "maxProperties": 50,
+            "description": "Optional per-line discounts keyed by the same selection id as fee_ids (`subscription`, `domain:<domainId>` or a fee id). A key that is not a line of the new invoice is a 422."
+          }
+        }
+      },
+      "InvoiceSendRequest": {
+        "type": "object",
+        "properties": {
+          "resend": {
+            "type": "boolean",
+            "description": "Required to send an invoice that was already sent."
+          }
+        }
+      },
+      "InvoiceEditRequest": {
+        "type": "object",
+        "description": "At least one of due_at, tax_rate_bp and discounts is required.",
+        "properties": {
+          "due_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Not before the issue date. null is not allowed."
+          },
+          "tax_rate_bp": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000,
+            "description": "Tax rate in basis points; tax_amount and total are recomputed."
+          },
+          "discounts": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/LineDiscount"
+            },
+            "maxProperties": 50,
+            "description": "Sets or clears line discounts, keyed by the line's `line_key`. An empty object value or a zero amount/percent clears that line's discount. Lines and totals are rewritten together on the server; period keys never change. A key that is not a line of the invoice is a 422."
+          }
+        }
+      },
+      "InvoiceLine": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The gross line amount (the snapshot price). The net of the line is amount - discount."
+          },
+          "fee_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "subscription",
+              "domain",
+              "deployment",
+              "other"
+            ]
+          },
+          "period": {
+            "type": "string",
+            "description": "The due date billed, YYYY-MM-DD."
+          },
+          "domain_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set on every domain line (fee-linked or derived)."
+          },
+          "line_key": {
+            "type": "string",
+            "description": "The selection id the line was made from (`subscription`, `domain:<domainId>` or a fee id); keys discounts on edit. Invoices made before it existed return an empty value; their lines are addressed by the id they would have had."
+          },
+          "discount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Discount in whole MNT, 0..amount; computed on the server. 0 when none."
+          },
+          "discount_bp": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000,
+            "description": "The percent (basis points) the operator entered, for display only; 0 when the discount was entered as an amount."
+          },
+          "discount_reason": {
+            "type": "string",
+            "maxLength": 100
+          }
+        }
+      },
+      "Invoice": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "number": {
+            "type": "string",
+            "pattern": "^INV-[0-9]{4}-([0-9]{2}-[0-9]{3,}|[0-9]{4,})$",
+            "description": "INV-YYYY-MM-NNN, sequential per month (UTC at issue time), unique. Older invoices carry INV-YYYY-NNNN."
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "due_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvoiceLine"
+            }
+          },
+          "subtotal": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of the gross line amounts (before discounts)."
+          },
+          "discount_total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Sum of the line discounts; 0 when none (and on invoices made before discounts existed)."
+          },
+          "tax_rate_bp": {
+            "type": "integer"
+          },
+          "tax_amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "(subtotal - discount_total) * tax_rate_bp / 10000, rounded half up."
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "subtotal - discount_total + tax_amount: the net amount to pay. amount_received on mark paid must equal it."
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "MNT"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "sent",
+              "paid",
+              "void"
+            ]
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "sent_to": {
+            "type": "string"
+          },
+          "paid_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "payment_instructions": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaymentInstructions"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when the invoice is first sent."
+          },
+          "payment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InvoicePayment"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when the invoice is marked paid."
+          }
+        }
+      },
+      "RegistrarPaidRequest": {
+        "type": "object",
+        "description": "Optional body. Defaults: paid_at now; paid_through the domain's expires_at (today + 365 days when it has none), never earlier than one already recorded; payer the recorded one, else us. Method and reference are kept unless given.",
+        "properties": {
+          "paid_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "paid_through": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Must not be before paid_at when both are given."
+          },
+          "payer": {
+            "type": "string",
+            "enum": [
+              "us",
+              "client"
+            ]
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "cash",
+              "bank",
+              "card",
+              "other"
+            ]
+          },
+          "reference": {
+            "type": "string",
+            "maxLength": 200
+          }
+        }
+      },
+      "PaymentSettingsRequest": {
+        "type": "object",
+        "description": "The whole settings document; a PUT replaces it. The currency is always MNT and is not stored.",
+        "required": [
+          "company_name",
+          "bank_name",
+          "account_name",
+          "account_number"
+        ],
+        "properties": {
+          "company_name": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "The issuing company, printed in the invoice header and the seller block."
+          },
+          "company_tagline": {
+            "type": "string",
+            "maxLength": 150,
+            "description": "Optional line under the company name."
+          },
+          "contact_person": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Optional; printed as the person in charge under the seller."
+          },
+          "bank_name": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "account_name": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "account_number": {
+            "type": "string",
+            "minLength": 4,
+            "maxLength": 34,
+            "pattern": "^[A-Za-z0-9 -]{4,34}$",
+            "description": "Letters, digits, space and hyphen only, so IBANs and local numbers fit."
+          },
+          "swift": {
+            "type": "string",
+            "pattern": "^([A-Za-z0-9]{8}|[A-Za-z0-9]{11})?$",
+            "description": "Optional, 8 or 11 letters or digits; stored upper-case."
+          },
+          "instructions": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Optional free note, for example to use the invoice number as the transfer description."
+          }
+        }
+      },
+      "PaymentSettings": {
+        "type": "object",
+        "description": "The platform's own issuer and bank details, printed on invoices it sends.",
+        "properties": {
+          "company_name": {
+            "type": "string"
+          },
+          "company_tagline": {
+            "type": "string"
+          },
+          "contact_person": {
+            "type": "string"
+          },
+          "bank_name": {
+            "type": "string"
+          },
+          "account_name": {
+            "type": "string"
+          },
+          "account_number": {
+            "type": "string"
+          },
+          "swift": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last editor."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "True when company_name, bank_name, account_name and account_number are all set. An unset document is all empty with configured false."
+          }
+        }
+      },
+      "PaymentInstructions": {
+        "type": "object",
+        "description": "Snapshot of the payment settings (issuer and bank details) taken when the invoice was first sent; never changed by later edits of the settings. Invoices sent before the issuer fields existed have them empty; preview and resend then read them from the current settings.",
+        "properties": {
+          "company_name": {
+            "type": "string"
+          },
+          "company_tagline": {
+            "type": "string"
+          },
+          "contact_person": {
+            "type": "string"
+          },
+          "bank_name": {
+            "type": "string"
+          },
+          "account_name": {
+            "type": "string"
+          },
+          "account_number": {
+            "type": "string"
+          },
+          "swift": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string"
+          }
+        }
+      },
+      "InvoicePreview": {
+        "type": "object",
+        "description": "The invoice mail as rendered, not sent.",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "Нэхэмжлэх <number>."
+          },
+          "text": {
+            "type": "string",
+            "description": "The plain text alternative."
+          },
+          "html": {
+            "type": "string",
+            "description": "The HTML body: table layout, inline CSS, no external assets, no scripts. Show it in a sandboxed iframe."
+          }
+        }
+      },
+      "InvoicePayment": {
+        "type": "object",
+        "description": "The transaction record captured when the invoice was marked paid.",
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "bank_transfer",
+              "cash",
+              "card",
+              "other"
+            ]
+          },
+          "reference": {
+            "type": "string"
+          },
+          "payer_name": {
+            "type": "string"
+          },
+          "payer_account_last4": {
+            "type": "string",
+            "pattern": "^[0-9]{4}$|^$"
+          },
+          "amount_received": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      },
+      "InvoicePaidRequest": {
+        "type": "object",
+        "description": "Optional body; an empty body keeps working with the defaults. Rejected values are 400 with a fixed message.",
+        "properties": {
+          "paid_at": {
+            "type": "string",
+            "description": "RFC 3339 or YYYY-MM-DD. Default now. Rejected when more than one day in the future or before the invoice's issue date."
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "bank_transfer",
+              "cash",
+              "card",
+              "other"
+            ],
+            "default": "bank_transfer"
+          },
+          "reference": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Bank transaction reference."
+          },
+          "payer_name": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "payer_account_last4": {
+            "type": "string",
+            "pattern": "^[0-9]{4}$",
+            "description": "Exactly four digits; anything longer is rejected so a full account number is never stored."
+          },
+          "amount_received": {
+            "type": "integer",
+            "format": "int64",
+            "description": "If given it must equal the invoice total (manual partial payments are not supported). Default the total."
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
+      },
+      "LineDiscount": {
+        "type": "object",
+        "description": "A discount for one line: exactly one of amount and percent_bp (an empty object clears the discount on an edit). The stored discount is always computed on the server; a percent is converted with amount * percent_bp / 10000, rounded half up. The discount cannot exceed the line amount (422).",
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Discount in whole MNT."
+          },
+          "percent_bp": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000,
+            "description": "Discount percent in basis points (1000 = 10%); kept on the line for display."
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Optional note shown on the invoice."
           }
         }
       }

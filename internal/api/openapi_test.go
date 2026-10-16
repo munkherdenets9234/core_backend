@@ -176,7 +176,7 @@ func TestDocsTemplateEnumMatchesMailer(t *testing.T) {
 	op := doc.Paths["/api/v1/svc/notifications/email"]["post"]
 	got := append([]string(nil), op.RequestBody.Content["application/json"].Schema.Properties.Template.Enum...)
 	sort.Strings(got)
-	want := mailer.Names() // already sorted
+	want := mailer.ServiceNames() // already sorted; internal-only templates (invoice) are not relayed
 
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("docs template enum = %v, mailer templates = %v", got, want)

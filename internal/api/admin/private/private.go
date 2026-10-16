@@ -14,18 +14,22 @@ import (
 )
 
 type Deps struct {
-	Tenant        *service.TenantService
-	Plan          *service.PlanService
-	Subscription  *service.SubscriptionService
-	PlatformUser  *service.PlatformUserService
-	ServiceClient *service.ServiceClientService
-	Entitlement   *service.EntitlementService
-	Showcase      *service.ShowcaseService
-	Quote         *service.QuoteService
-	TenantPlan    *service.TenantPlanService
-	SiteContent   *service.SiteContentService
-	Promote       *service.PromoteService
-	MailLog       *service.MailLogService
+	Tenant          *service.TenantService
+	Plan            *service.PlanService
+	Subscription    *service.SubscriptionService
+	PlatformUser    *service.PlatformUserService
+	ServiceClient   *service.ServiceClientService
+	Entitlement     *service.EntitlementService
+	Showcase        *service.ShowcaseService
+	Quote           *service.QuoteService
+	TenantPlan      *service.TenantPlanService
+	SiteContent     *service.SiteContentService
+	Promote         *service.PromoteService
+	MailLog         *service.MailLogService
+	Domain          *service.DomainService
+	Fee             *service.FeeService
+	Invoice         *service.InvoiceService
+	PaymentSettings *service.PaymentSettingsService
 
 	// AuthRateLimit guards the password-changing routes, which take a
 	// current password as input and are therefore guessable.
@@ -46,6 +50,10 @@ func Register(base *gin.RouterGroup, d Deps) {
 		promote.actors = d.PlatformUser
 	}
 	mailLog := &mailLogController{svc: d.MailLog}
+	domains := &domainsController{svc: d.Domain}
+	fees := &feesController{svc: d.Fee}
+	invoices := &invoicesController{svc: d.Invoice}
+	paySettings := &paymentSettingsController{svc: d.PaymentSettings}
 
 	g := httpx.Wrap(base)
 
@@ -71,6 +79,32 @@ func Register(base *gin.RouterGroup, d Deps) {
 	// without impersonating carwash, is what turns "the customer says the
 	// module is missing" into a ten-second check.
 	t.GET("/:id/entitlement", tenants.GetEntitlement)
+
+	// The operator's domain records for the tenant: ownership, DNS, hosting,
+	// expiry. Bookkeeping only, never routing or auth.
+	t.GET("/:id/domains", domains.List)
+	t.POST("/:id/domains", domains.Create)
+	t.GET("/:id/domains/:domainId", domains.Get)
+	t.PUT("/:id/domains/:domainId", domains.Update)
+	t.DELETE("/:id/domains/:domainId", domains.Delete)
+	t.POST("/:id/domains/:domainId/registrar-paid", domains.RegistrarPaid)
+
+	// The operator's fee ledger, the costing view derived from it and the
+	// subscription, and the invoices made from it. Bookkeeping only.
+	t.GET("/:id/fees", fees.List)
+	t.POST("/:id/fees", fees.Create)
+	t.PUT("/:id/fees/:feeId", fees.Update)
+	t.DELETE("/:id/fees/:feeId", fees.Delete)
+	t.GET("/:id/costing", fees.Costing)
+	t.GET("/:id/invoices", invoices.List)
+	t.POST("/:id/invoices", invoices.Create)
+	t.GET("/:id/invoices/:invId", invoices.Get)
+	t.PUT("/:id/invoices/:invId", invoices.Edit)
+	t.DELETE("/:id/invoices/:invId", invoices.Delete)
+	t.GET("/:id/invoices/:invId/preview", invoices.Preview)
+	t.POST("/:id/invoices/:invId/send", invoices.Send)
+	t.POST("/:id/invoices/:invId/paid", invoices.Paid)
+	t.POST("/:id/invoices/:invId/void", invoices.Void)
 
 	// The operator's own content about a tenant: its case study, the leads
 	// it produced, and which pricing cards it displays. None of this affects
@@ -118,6 +152,10 @@ func Register(base *gin.RouterGroup, d Deps) {
 	sc.GET("", clients.List)
 	sc.POST("/:id/revoke", clients.Revoke)
 	sc.POST("/:id/rotate", clients.Rotate)
+
+	// The platform's own bank details, printed on invoices it sends.
+	g.GET("/payment-settings", paySettings.Get)
+	g.PUT("/payment-settings", paySettings.Put)
 
 	// What the mailer tried to send, newest first. Read-only: rows are
 	// written by the mailer itself and expire after 30 days.

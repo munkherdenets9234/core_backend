@@ -61,6 +61,14 @@ const (
 	// unsubscribe link. Every value is inserted at a fixed position and
 	// sanitized like the other templates; the subject has CR/LF stripped.
 	TemplateRequestNotification Template = "request_notification"
+
+	// TemplateInvoice delivers a tenant's invoice, as HTML with a plain text
+	// alternative. Sent only by tenantcore's own invoice service, to the
+	// tenant's contact address resolved on the server, never to an address a
+	// caller names. For that reason it is not available through /svc (see
+	// KnownForService). Line labels and every other value are untrusted text:
+	// sanitised, capped, and HTML-escaped in the HTML body.
+	TemplateInvoice Template = "invoice"
 )
 
 type templateDef struct {
@@ -70,6 +78,14 @@ type templateDef struct {
 	// a missing key is an error naming the key, rather than a mail that goes
 	// out with a blank space where the reset link should be.
 	required []string
+	// internal marks a template only tenantcore's own services send; the
+	// /svc relay refuses it.
+	internal bool
+	// derive, when set, validates the sanitised data and adds computed keys
+	// to it (for example the rendered line list of an invoice).
+	derive func(clean map[string]string) error
+	// html, when set, renders the HTML body from the derived data.
+	html func(clean map[string]string) string
 }
 
 // The bodies are plain text with {{key}} placeholders. Deliberately not
@@ -90,6 +106,32 @@ Open this link to choose a new one:
 
 The link expires in {{expires_in}}. If you did not ask for this, you can
 ignore this message — your password will not change until the link is used.
+`,
+	},
+	TemplateInvoice: {
+		subject:  "Нэхэмжлэх {{number}}",
+		required: []string{"tenant", "number", "issued_on", "due_on", "currency", "subtotal", "total", "line_count", "issuer_name", "pay_bank_name", "pay_account_name", "pay_account_number"},
+		internal: true,
+		derive:   deriveInvoice,
+		html:     invoiceHTML,
+		body: `НЭХЭМЖЛЭХ № {{number}}
+
+{{issuer_name}}
+{{tagline_text}}
+ХУДАЛДАН АВАГЧ: {{tenant}}
+НИЙЛҮҮЛЭГЧ: {{issuer_name}}
+{{contact_text}}
+НЭХЭМЖИЛСЭН ОГНОО: {{issued_on}}
+ТӨЛӨХ ЭЦСИЙН ХУГАЦАА: {{due_on}}
+ВАЛЮТ: {{currency}} ₮
+
+БАРАА, ҮЙЛЧИЛГЭЭ
+{{lines_text}}
+
+Дэд дүн: ₮{{subtotal}}
+{{discount_text}}{{tax_text}}НИЙТ ТӨЛӨХ ДҮН: ₮{{total}}
+{{words_text}}
+{{pay_text}}
 `,
 	},
 	TemplatePasswordResetCode: {
@@ -201,6 +243,26 @@ func Known(name string) (Template, bool) {
 	return t, ok
 }
 
+// KnownForService is Known minus the templates only tenantcore sends itself.
+// The /svc relay uses it, so a service key cannot be used to mail an invoice.
+func KnownForService(name string) (Template, bool) {
+	t := Template(name)
+	def, ok := templates[t]
+	return t, ok && !def.internal
+}
+
+// ServiceNames lists the templates a service may ask for, sorted.
+func ServiceNames() []string {
+	out := make([]string, 0, len(templates))
+	for t, def := range templates {
+		if !def.internal {
+			out = append(out, string(t))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Names lists every template, sorted, for error messages and the contract.
 func Names() []string {
 	out := make([]string, 0, len(templates))
@@ -212,26 +274,49 @@ func Names() []string {
 }
 
 func render(t Template, data map[string]string) (subject, body string, err error) {
+	subject, body, _, err = renderMail(t, data)
+	return subject, body, err
+}
+
+// Render validates data against the template and returns the subject, plain
+// text body and HTML body (empty for plain-text templates) without sending
+// anything. For tests and previews; Send uses the same path.
+func Render(t Template, data map[string]string) (subject, text, htmlBody string, err error) {
+	return renderMail(t, data)
+}
+
+// renderMail is render plus the HTML body, empty for a plain-text template.
+func renderMail(t Template, data map[string]string) (subject, body, htmlBody string, err error) {
 	def, ok := templates[t]
 	if !ok {
-		return "", "", fmt.Errorf("mailer: unknown template %q (known: %s)", t, strings.Join(Names(), ", "))
+		return "", "", "", fmt.Errorf("mailer: unknown template %q (known: %s)", t, strings.Join(Names(), ", "))
 	}
 
+	// Sanitise first, then check required keys on what will actually be
+	// rendered: a value of only zero-width or control characters is empty
+	// once cleaned and must count as missing.
+	clean, err := sanitize(data)
+	if err != nil {
+		return "", "", "", fmt.Errorf("mailer: template %q: %w", t, err)
+	}
 	var missing []string
 	for _, k := range def.required {
-		if strings.TrimSpace(data[k]) == "" {
+		if strings.TrimSpace(clean[k]) == "" {
 			missing = append(missing, k)
 		}
 	}
 	if len(missing) > 0 {
-		return "", "", fmt.Errorf("mailer: template %q is missing data: %s", t, strings.Join(missing, ", "))
+		return "", "", "", fmt.Errorf("mailer: template %q is missing data: %s", t, strings.Join(missing, ", "))
 	}
-
-	clean, err := sanitize(data)
-	if err != nil {
-		return "", "", fmt.Errorf("mailer: template %q: %w", t, err)
+	if def.derive != nil {
+		if err := def.derive(clean); err != nil {
+			return "", "", "", fmt.Errorf("mailer: template %q: %w", t, err)
+		}
 	}
-	return substitute(def.subject, clean), substitute(def.body, clean), nil
+	if def.html != nil {
+		htmlBody = def.html(clean)
+	}
+	return substitute(def.subject, clean), substitute(def.body, clean), htmlBody, nil
 }
 
 const (
@@ -239,6 +324,9 @@ const (
 	// lead's name is typed by an anonymous visitor), and none of the fixed
 	// fields needs more than a line.
 	maxValueRunes = 200
+	// maxPayInstructionsRunes is the cap of the invoice's free payment note,
+	// which the settings allow up to 500 characters.
+	maxPayInstructionsRunes = 500
 	// maxURLLen bounds a link. Links are refused rather than truncated past
 	// it, because a cut link is a broken link that still looks valid.
 	maxURLLen = 2048
@@ -286,8 +374,12 @@ func sanitize(data map[string]string) (map[string]string, error) {
 			}
 			return r
 		}, v)
-		if r := []rune(v); len(r) > maxValueRunes {
-			v = string(r[:maxValueRunes])
+		limit := maxValueRunes
+		if k == "pay_instructions" {
+			limit = maxPayInstructionsRunes
+		}
+		if r := []rune(v); len(r) > limit {
+			v = string(r[:limit])
 		}
 		out[k] = v
 	}
