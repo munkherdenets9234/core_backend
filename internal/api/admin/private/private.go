@@ -29,6 +29,7 @@ type Deps struct {
 	Domain          *service.DomainService
 	Fee             *service.FeeService
 	Invoice         *service.InvoiceService
+	Onboarding      *service.OnboardingService
 	PaymentSettings *service.PaymentSettingsService
 
 	// AuthRateLimit guards the password-changing routes, which take a
@@ -53,6 +54,7 @@ func Register(base *gin.RouterGroup, d Deps) {
 	domains := &domainsController{svc: d.Domain}
 	fees := &feesController{svc: d.Fee}
 	invoices := &invoicesController{svc: d.Invoice}
+	onboarding := &onboardingController{svc: d.Onboarding}
 	paySettings := &paymentSettingsController{svc: d.PaymentSettings}
 
 	g := httpx.Wrap(base)
@@ -105,6 +107,11 @@ func Register(base *gin.RouterGroup, d Deps) {
 	t.POST("/:id/invoices/:invId/send", invoices.Send)
 	t.POST("/:id/invoices/:invId/paid", invoices.Paid)
 	t.POST("/:id/invoices/:invId/void", invoices.Void)
+
+	// The welcome email: status, preview, and a guarded send.
+	t.GET("/:id/onboarding", onboarding.Status)
+	t.GET("/:id/onboarding/preview", onboarding.Preview)
+	t.POST("/:id/onboarding/send", onboarding.Send)
 
 	// The operator's own content about a tenant: its case study, the leads
 	// it produced, and which pricing cards it displays. None of this affects

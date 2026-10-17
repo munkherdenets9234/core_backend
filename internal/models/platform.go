@@ -50,6 +50,11 @@ type Tenant struct {
 	// Always stored via NormalizeHost; unique across tenants (see the index).
 	Hosts []string `bson:"site_hosts,omitempty" json:"hosts"`
 
+	// OnboardingSentAt/To record the welcome email last sent to the tenant
+	// contact. Bookkeeping only; unset until the first send.
+	OnboardingSentAt *time.Time `bson:"onboarding_sent_at,omitempty" json:"onboarding_sent_at,omitempty"`
+	OnboardingSentTo string     `bson:"onboarding_sent_to,omitempty" json:"onboarding_sent_to,omitempty"`
+
 	Status    TenantStatus `bson:"status" json:"status"`
 	CreatedAt time.Time    `bson:"created_at" json:"created_at"`
 	UpdatedAt time.Time    `bson:"updated_at" json:"updated_at"`
