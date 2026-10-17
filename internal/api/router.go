@@ -52,6 +52,7 @@ func (s *Server) buildEngine() *gin.Engine {
 		Domain:          d.Domain,
 		Fee:             d.Fee,
 		Invoice:         d.Invoice,
+		Onboarding:      d.Onboarding,
 		PaymentSettings: d.PaymentSettings,
 		AuthRateLimit:   s.limit("admin-auth", d.Config.AuthRatePerMinute),
 	})

@@ -4391,6 +4391,210 @@
         }
       }
     },
+    "/api/v1/admin/tenants/{id}/onboarding": {
+      "get": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "getTenantOnboarding",
+        "summary": "Onboarding email status",
+        "description": "Whether the welcome email has been sent to the tenant's contact address, and what stops a send (blockers: no_contact_email, no_domains, email_off). Superadmin only.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/OnboardingStatus"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/onboarding/preview": {
+      "get": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "previewTenantOnboarding",
+        "summary": "Preview the onboarding email",
+        "description": "Renders the fixed Mongolian onboarding mail (project intro plus the tenant's domains and ownership summary) with the renderer Send uses. Sends nothing and changes nothing. Works when email is off or the contact email is missing; returns 409 when the tenant has no domains. The optional note is at most 500 characters (400 otherwise). Superadmin only.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          },
+          {
+            "name": "note",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "description": "Optional personal note shown in the mail."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rendered mail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/InvoicePreview"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The tenant has no domains to describe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/onboarding/send": {
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "sendTenantOnboarding",
+        "summary": "Email the onboarding message to the tenant's contact address",
+        "description": "The recipient is the tenant's contact_email, resolved on the server; the request cannot name one. A second send needs {\"resend\": true}. 409 when the tenant has no contact email, has no domains, or was already sent without resend. With email off the answer is 503 and nothing is recorded. On success sent_at and sent_to are set. An empty body is a first send. Superadmin only.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardingSendRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/OnboardingStatus"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "No contact email, no domains, or already sent (set resend)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The mail provider refused the message; nothing is recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Email is not configured on this deployment; nothing is recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/tenants/{id}/invoices/{invId}/paid": {
       "post": {
         "tags": [
@@ -7454,6 +7658,51 @@
           },
           "instructions": {
             "type": "string"
+          }
+        }
+      },
+      "OnboardingStatus": {
+        "type": "object",
+        "description": "State of a tenant's onboarding email.",
+        "properties": {
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "sent_to": {
+            "type": "string",
+            "description": "Address the mail was last sent to."
+          },
+          "can_send": {
+            "type": "boolean"
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "no_contact_email",
+                "no_domains",
+                "email_off"
+              ]
+            }
+          }
+        }
+      },
+      "OnboardingSendRequest": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Optional personal note."
+          },
+          "resend": {
+            "type": "boolean",
+            "description": "Required to send again after a first send."
           }
         }
       },

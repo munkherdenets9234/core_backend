@@ -139,6 +139,7 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 	invoiceRepo := repository.NewInvoiceRepo(db)
 	feeSvc.SetInvoiceSource(invoiceRepo)
 	invoiceSvc := service.NewInvoiceService(invoiceRepo, feeSvc, feeRepo, domainRepo, tenants, mail, paymentSettingsSvc, service.AppName)
+	onboardingSvc := service.NewOnboardingService(tenants, domainRepo, mail, paymentSettingsSvc, service.AppName)
 
 	srv := api.NewServer(api.Deps{
 		Config: cfg,
@@ -167,6 +168,7 @@ func NewForDatabase(ctx context.Context, cfg *config.Config, db *mongo.Database,
 		Domain:          service.NewDomainService(domainRepo, tenants, feeRepo),
 		Fee:             feeSvc,
 		Invoice:         invoiceSvc,
+		Onboarding:      onboardingSvc,
 		PaymentSettings: paymentSettingsSvc,
 	})
 

@@ -69,6 +69,14 @@ const (
 	// KnownForService). Line labels and every other value are untrusted text:
 	// sanitised, capped, and HTML-escaped in the HTML body.
 	TemplateInvoice Template = "invoice"
+
+	// TemplateOnboarding is the tenant welcome mail: a short project intro and
+	// the tenant's domain and ownership summary. Sent only by tenantcore's own
+	// onboarding service, to the tenant's contact address resolved on the
+	// server; for that reason it is not available through /svc (see
+	// KnownForService). Every value is untrusted text: sanitised, capped, and
+	// HTML-escaped in the HTML body. It never carries credentials.
+	TemplateOnboarding Template = "onboarding"
 )
 
 type templateDef struct {
@@ -132,6 +140,23 @@ ignore this message — your password will not change until the link is used.
 {{discount_text}}{{tax_text}}НИЙТ ТӨЛӨХ ДҮН: ₮{{total}}
 {{words_text}}
 {{pay_text}}
+`,
+	},
+	TemplateOnboarding: {
+		subject:  "Тавтай морилно уу — {{tenant}}",
+		required: []string{"tenant", "domain_count", "issuer_name"},
+		internal: true,
+		derive:   deriveOnboarding,
+		html:     onboardingHTML,
+		body: `Тавтай морилно уу, {{tenant}}.
+
+ТӨСЛИЙН МЭДЭЭЛЭЛ
+{{intro_text}}
+{{site_text}}
+ДОМЭЙН БА ЭЗЭМШИЛ
+{{domains_text}}
+{{contacts_text}}{{note_text}}
+{{issuer_name}}
 `,
 	},
 	TemplatePasswordResetCode: {
@@ -327,6 +352,8 @@ const (
 	// maxPayInstructionsRunes is the cap of the invoice's free payment note,
 	// which the settings allow up to 500 characters.
 	maxPayInstructionsRunes = 500
+	// maxNoteRunes is the cap of the onboarding mail's optional note.
+	maxNoteRunes = 500
 	// maxURLLen bounds a link. Links are refused rather than truncated past
 	// it, because a cut link is a broken link that still looks valid.
 	maxURLLen = 2048
@@ -336,7 +363,7 @@ const (
 // minted by a product service and land in mail a person is asked to click;
 // anything else (http, javascript:, a relative path) is a caller bug or an
 // attempt to point the reader somewhere else.
-var httpsOnly = map[string]bool{"invite_url": true, "lead_url": true, "admin_url": true, "unsubscribe_url": true}
+var httpsOnly = map[string]bool{"invite_url": true, "lead_url": true, "admin_url": true, "unsubscribe_url": true, "site_url": true}
 
 // sanitize returns a copy of data safe to insert into a fixed template.
 //
@@ -345,7 +372,9 @@ var httpsOnly = map[string]bool{"invite_url": true, "lead_url": true, "admin_url
 // faking a second "Listing:" line), and are capped at maxValueRunes. Link
 // values (keys ending in _url) are never altered: one carrying a control
 // character or longer than maxURLLen is refused, and httpsOnly keys must be
-// absolute https URLs with a host.
+// absolute https URLs with a host. The one exception is the onboarding list
+// value domain_N_subs: one entry per line, each cleaned and capped on its own,
+// so the line breaks between entries are kept.
 func sanitize(data map[string]string) (map[string]string, error) {
 	out := make(map[string]string, len(data))
 	for k, v := range data {
@@ -365,25 +394,52 @@ func sanitize(data map[string]string) (map[string]string, error) {
 			out[k] = v
 			continue
 		}
-		v = strings.Map(func(r rune) rune {
-			switch {
-			case r == '\r' || r == '\n' || r == '\u0085' || r == '\u2028' || r == '\u2029':
-				return ' ' // a line break becomes a space, so words stay apart
-			case isUnsafeRune(r):
-				return -1
+		if strings.HasPrefix(k, "domain_") && strings.HasSuffix(k, "_subs") {
+			// A list value: one entry per line. Each line is cleaned and capped
+			// on its own, so the line breaks between entries survive while a
+			// line break inside an entry still cannot add a line.
+			var kept []string
+			for _, line := range strings.Split(v, "\n") {
+				if line = strings.TrimSpace(cleanLine(line)); line != "" {
+					kept = append(kept, capRunes(line, maxValueRunes))
+				}
 			}
-			return r
-		}, v)
+			out[k] = strings.Join(kept, "\n")
+			continue
+		}
+		v = cleanLine(v)
 		limit := maxValueRunes
 		if k == "pay_instructions" {
 			limit = maxPayInstructionsRunes
 		}
-		if r := []rune(v); len(r) > limit {
-			v = string(r[:limit])
+		if k == "note" {
+			limit = maxNoteRunes
 		}
-		out[k] = v
+		out[k] = capRunes(v, limit)
 	}
 	return out, nil
+}
+
+// cleanLine turns line breaks into spaces and removes every other control or
+// format character.
+func cleanLine(v string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\r' || r == '\n' || r == '\u0085' || r == '\u2028' || r == '\u2029':
+			return ' ' // a line break becomes a space, so words stay apart
+		case isUnsafeRune(r):
+			return -1
+		}
+		return r
+	}, v)
+}
+
+// capRunes cuts v to at most limit runes.
+func capRunes(v string, limit int) string {
+	if r := []rune(v); len(r) > limit {
+		return string(r[:limit])
+	}
+	return v
 }
 
 // isUnsafeRune reports a rune that could break a line or hide text: C0/C1

@@ -48,6 +48,7 @@ type Deps struct {
 	Domain          *service.DomainService
 	Fee             *service.FeeService
 	Invoice         *service.InvoiceService
+	Onboarding      *service.OnboardingService
 	PaymentSettings *service.PaymentSettingsService
 }
 

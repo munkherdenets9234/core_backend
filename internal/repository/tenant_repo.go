@@ -123,6 +123,29 @@ func (r *TenantRepo) update(ctx context.Context, id primitive.ObjectID, set bson
 	return nil
 }
 
+// MarkOnboardingSent records a sent onboarding email. Unless allowResend, the
+// update only matches a tenant with no onboarding_sent_at, so a repeated send
+// loses the race and gets mongo.ErrNoDocuments (also returned when the tenant
+// does not exist).
+func (r *TenantRepo) MarkOnboardingSent(ctx context.Context, id primitive.ObjectID, to string, at time.Time, allowResend bool) error {
+	filter := bson.M{"_id": id}
+	if !allowResend {
+		filter["onboarding_sent_at"] = bson.M{"$exists": false}
+	}
+	res, err := r.col.UpdateOne(ctx, filter, bson.M{"$set": bson.M{
+		"onboarding_sent_at": at,
+		"onboarding_sent_to": to,
+		"updated_at":         time.Now(),
+	}})
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return nil
+}
+
 // FindByHost resolves a visitor's hostname to the tenant that owns it. The
 // host must already be normalised (models.NormalizeHost); site_hosts is
 // stored in that form and the match is exact. Served by the unique index on
