@@ -7,7 +7,8 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// Invoice statuses. paid and void are terminal.
+// Invoice statuses. void is terminal. paid is final except that a paid invoice
+// can be cancelled, which makes it void (see InvoiceService.CancelPaid).
 const (
 	InvoiceDraft = "draft"
 	InvoiceSent  = "sent"
@@ -58,6 +59,15 @@ type Invoice struct {
 	// Payment is the transaction record captured when the invoice was marked
 	// paid.
 	Payment *InvoicePayment `bson:"payment,omitempty" json:"payment"`
+
+	// CancelReason and CancelledAt record why and when a paid invoice was
+	// cancelled (status void). Payment and PaidAt stay for audit.
+	CancelReason string     `bson:"cancel_reason,omitempty" json:"cancel_reason"`
+	CancelledAt  *time.Time `bson:"cancelled_at,omitempty" json:"cancelled_at"`
+	// SubAdvancedTo is the current_period_end MarkPaid moved the subscription
+	// to for a subscription line; CancelPaid rolls it back only while the
+	// subscription still ends there. Internal.
+	SubAdvancedTo *time.Time `bson:"sub_advanced_to,omitempty" json:"-"`
 
 	// SendPrev is the status to restore if a send fails; set only while the
 	// status is InvoiceSending. Internal.

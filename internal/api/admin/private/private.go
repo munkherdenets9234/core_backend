@@ -107,6 +107,7 @@ func Register(base *gin.RouterGroup, d Deps) {
 	t.POST("/:id/invoices/:invId/send", invoices.Send)
 	t.POST("/:id/invoices/:invId/paid", invoices.Paid)
 	t.POST("/:id/invoices/:invId/void", invoices.Void)
+	t.POST("/:id/invoices/:invId/cancel", invoices.Cancel)
 
 	// The welcome email: status, preview, and a guarded send.
 	t.GET("/:id/onboarding", onboarding.Status)

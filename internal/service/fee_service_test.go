@@ -91,6 +91,21 @@ func (f *fakeFeeStore) AdvanceInvoicedThrough(_ context.Context, tid, id primiti
 	return nil
 }
 
+// RevertInvoicedThrough mimics the repository: only while the value equals through.
+func (f *fakeFeeStore) RevertInvoicedThrough(_ context.Context, tid, id primitive.ObjectID, through time.Time, prev *time.Time) error {
+	for _, e := range f.docs {
+		if e.ID == id && e.TenantID == tid && e.LastInvoicedThrough != nil && e.LastInvoicedThrough.Equal(through) {
+			if prev == nil {
+				e.LastInvoicedThrough = nil
+			} else {
+				p := *prev
+				e.LastInvoicedThrough = &p
+			}
+		}
+	}
+	return nil
+}
+
 type costSubs map[primitive.ObjectID]*models.Subscription
 
 func (f costSubs) Get(_ context.Context, tid primitive.ObjectID) (*models.Subscription, error) {

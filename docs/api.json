@@ -4686,7 +4686,7 @@
         ],
         "operationId": "voidTenantInvoice",
         "summary": "Void a draft or sent invoice",
-        "description": "Frees its fee periods to be invoiced again. paid and void are terminal (409).",
+        "description": "Frees its fee periods to be invoiced again. A paid invoice is refused (409): use the cancel route. void is terminal.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ObjectId"
@@ -4735,6 +4735,94 @@
           },
           "409": {
             "description": "Already paid or void",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tenants/{id}/invoices/{invId}/cancel": {
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "cancelTenantInvoice",
+        "summary": "Cancel a paid invoice",
+        "description": "Makes a paid invoice void with a required reason and reverses what paying it advanced: fee last_invoiced_through, a domain's client paid_through and the subscription period end, each only while it still holds the value paying wrote. The payment record stays for audit and the lines can be invoiced again. Calling it again on a cancelled invoice re-runs the reversal and answers 200 with the original reason. Only a paid invoice (or one already cancelled) can be cancelled, else 409.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObjectId"
+          },
+          {
+            "name": "invId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Invoice id. An invoice of another tenant is a 404."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "description": "Why the invoice is cancelled. Trimmed; required."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Invoice"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Not a paid invoice",
             "content": {
               "application/json": {
                 "schema": {
@@ -7382,6 +7470,18 @@
         "properties": {
           "id": {
             "type": "string"
+          },
+          "cancel_reason": {
+            "type": "string",
+            "description": "Why a paid invoice was cancelled; empty otherwise."
+          },
+          "cancelled_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a paid invoice was cancelled; null otherwise."
           },
           "tenant_id": {
             "type": "string"

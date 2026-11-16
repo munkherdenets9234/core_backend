@@ -196,6 +196,15 @@ func (f *fakeInvoiceStore) Transition(_ context.Context, tid, id primitive.Objec
 		if v, ok := set["discount_total"].(int64); ok {
 			d.DiscountTotal = v
 		}
+		if v, ok := set["cancel_reason"].(string); ok {
+			d.CancelReason = v
+		}
+		if v, ok := set["cancelled_at"].(time.Time); ok {
+			d.CancelledAt = &v
+		}
+		if v, ok := set["sub_advanced_to"].(time.Time); ok {
+			d.SubAdvancedTo = &v
+		}
 		d.UpdatedAt = testNow.Add(time.Minute)
 		if _, ok := set["period_keys"]; ok {
 			d.PeriodKeys = nil
@@ -1278,5 +1287,307 @@ func TestPreviewAfterEdit(t *testing.T) {
 	}
 	if !strings.Contains(p.Text, due.Format(displayDateLayout)) || !strings.Contains(p.Text, "10%") {
 		t.Errorf("preview does not show the edit:\n%s", p.Text)
+	}
+}
+// â”€â”€ Cancel a paid invoice / subscription advance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+// invSubs is the subscription source of the invoice tests: it mimics the
+// conditional AdvancePeriod and RollbackPeriod of the repository.
+type invSubs struct {
+	costSubs
+	advances int
+}
+
+func (f *invSubs) AdvancePeriod(_ context.Context, tid primitive.ObjectID, billedEnd, newEnd time.Time) error {
+	if s, ok := f.costSubs[tid]; ok && !dayStart(s.CurrentPeriodEnd).After(billedEnd) {
+		s.CurrentPeriodEnd, s.Status = newEnd, models.SubscriptionActive
+		f.advances++
+	}
+	return nil
+}
+
+func (f *invSubs) RollbackPeriod(_ context.Context, tid primitive.ObjectID, from, to time.Time) error {
+	if s, ok := f.costSubs[tid]; ok && s.CurrentPeriodEnd.Equal(from) {
+		s.CurrentPeriodEnd = to
+	}
+	return nil
+}
+
+// paidFixture seeds tenant A, wires subscriptions and returns an all-due
+// invoice that is sent and marked paid.
+func paidFixture(t *testing.T) (*invFixture, *invSubs, *models.Invoice) {
+	t.Helper()
+	fx := newInvFixture()
+	fx.seed(t)
+	subs := &invSubs{costSubs: fx.subs}
+	fx.inv.SetSubscriptions(subs)
+	ctx := context.Background()
+	inv := fx.createAllDue(t, nil)
+	if _, err := fx.inv.Send(ctx, fx.a.Hex(), inv.ID.Hex(), SendInput{}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := fx.inv.MarkPaid(ctx, fx.a.Hex(), inv.ID.Hex(), PaidInput{Reference: "REF1"})
+	if err != nil {
+		t.Fatalf("mark paid: %v", err)
+	}
+	return fx, subs, out
+}
+
+func (fx *invFixture) feeByLabel(label string) *models.TenantFee {
+	for _, f := range fx.fees.docs {
+		if f.Label == label {
+			return f
+		}
+	}
+	return nil
+}
+
+func (fx *invFixture) lit(t *testing.T, label string) *time.Time {
+	t.Helper()
+	f := fx.feeByLabel(label)
+	if f == nil {
+		t.Fatalf("no fee %q", label)
+	}
+	return f.LastInvoicedThrough
+}
+
+func TestCancelPaidHappyPath(t *testing.T) {
+	fx, _, inv := paidFixture(t)
+	ctx := context.Background()
+	out, err := fx.inv.CancelPaid(ctx, fx.a.Hex(), inv.ID.Hex(), CancelPaidInput{Reason: "  paid twice  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Status != models.InvoiceVoid || out.CancelReason != "paid twice" || out.CancelledAt == nil {
+		t.Fatalf("cancelled invoice = %+v", out)
+	}
+	if out.Payment == nil || out.Payment.Reference != "REF1" || out.PaidAt == nil {
+		t.Fatal("payment record must be kept for audit")
+	}
+	if len(fx.st.docs[0].PeriodKeys) != 0 {
+		t.Fatal("period keys must be freed")
+	}
+	again, err := fx.inv.Create(ctx, fx.a.Hex(), InvoiceInput{AllDue: true})
+	if err != nil || len(again.Lines) == 0 {
+		t.Fatalf("re-invoice after cancel: %v", err)
+	}
+	if _, err := fx.inv.Void(ctx, fx.a.Hex(), inv.ID.Hex()); domStatus(err) != http.StatusConflict {
+		t.Fatalf("void of cancelled = %v", err)
+	}
+}
+
+func TestCancelPaidReasonValidation(t *testing.T) {
+	fx, _, inv := paidFixture(t)
+	for name, reason := range map[string]string{"empty": "", "blank": "   ", "long": strings.Repeat("x", 501)} {
+		_, err := fx.inv.CancelPaid(context.Background(), fx.a.Hex(), inv.ID.Hex(), CancelPaidInput{Reason: reason})
+		if domStatus(err) != http.StatusBadRequest || strings.Contains(err.Error(), "xxx") {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	if fx.st.docs[0].Status != models.InvoicePaid {
+		t.Fatal("invalid reason must change nothing")
+	}
+}
+
+func TestCancelNonPaidIs409(t *testing.T) {
+	fx := newInvFixture()
+	fx.seed(t)
+	ctx := context.Background()
+	tid := fx.a.Hex()
+	inv := fx.createAllDue(t, nil)
+	try := func(label string) {
+		if _, err := fx.inv.CancelPaid(ctx, tid, inv.ID.Hex(), CancelPaidInput{Reason: "x"}); domStatus(err) != http.StatusConflict {
+			t.Errorf("%s: err = %v", label, err)
+		}
+	}
+	try("draft")
+	if _, err := fx.inv.Send(ctx, tid, inv.ID.Hex(), SendInput{}); err != nil {
+		t.Fatal(err)
+	}
+	try("sent")
+	if _, err := fx.inv.Void(ctx, tid, inv.ID.Hex()); err != nil {
+		t.Fatal(err)
+	}
+	try("void, never paid")
+}
+
+func TestCancelPaidTwiceHealsAndIsReplaySafe(t *testing.T) {
+	fx, _, inv := paidFixture(t)
+	ctx := context.Background()
+	tid := fx.a.Hex()
+	first, err := fx.inv.CancelPaid(ctx, tid, inv.ID.Hex(), CancelPaidInput{Reason: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a reversal that failed: the fee is still advanced.
+	through := dayStart(testNow)
+	fx.feeByLabel("Hosting").LastInvoicedThrough = &through
+	second, err := fx.inv.CancelPaid(ctx, tid, inv.ID.Hex(), CancelPaidInput{Reason: "second"})
+	if err != nil {
+		t.Fatalf("second cancel: %v", err)
+	}
+	if second.CancelReason != "first" || !second.CancelledAt.Equal(*first.CancelledAt) {
+		t.Fatal("a replay must not overwrite the first cancellation")
+	}
+	if got := fx.lit(t, "Hosting"); got == nil || got.Month() != time.September {
+		t.Fatalf("replay did not heal the fee: %v", got)
+	}
+}
+
+func TestCancelPaidRevertsFeeThrough(t *testing.T) {
+	fx := newInvFixture()
+	ctx := context.Background()
+	tid := fx.a.Hex()
+	monthly := fx.addFee(t, fx.a, FeeInput{Kind: "deployment", Label: "M", Amount: 10, Interval: "monthly"})
+	fx.addFee(t, fx.a, FeeInput{Kind: "other", Label: "O", Amount: 20, Interval: "one_time"})
+	inv, err := fx.inv.Create(ctx, tid, InvoiceInput{AllDue: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.inv.Send(ctx, tid, inv.ID.Hex(), SendInput{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.inv.MarkPaid(ctx, tid, inv.ID.Hex(), PaidInput{}); err != nil {
+		t.Fatal(err)
+	}
+	if fx.lit(t, "M") == nil || fx.lit(t, "O") == nil {
+		t.Fatal("pay did not advance")
+	}
+	if _, err := fx.inv.CancelPaid(ctx, tid, inv.ID.Hex(), CancelPaidInput{Reason: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fx.lit(t, "M"); got == nil || !got.Equal(addMonths(dayStart(monthly.CreatedAt), -1, billingAnchorDay(monthly))) {
+		t.Fatalf("monthly reverted to %v", got)
+	}
+	if due := FeeNextDue(fx.feeByLabel("M"), nil); due == nil || !due.Equal(dayStart(monthly.CreatedAt)) {
+		t.Fatalf("monthly next due = %v", due)
+	}
+	if got := fx.lit(t, "O"); got != nil {
+		t.Fatalf("one_time must be unset, got %v", got)
+	}
+
+	// A later advance is never undone: pay again, cancel, move the fee on,
+	// replay the cancel.
+	inv2, err := fx.inv.Create(ctx, tid, InvoiceInput{AllDue: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.inv.Send(ctx, tid, inv2.ID.Hex(), SendInput{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.inv.MarkPaid(ctx, tid, inv2.ID.Hex(), PaidInput{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.inv.CancelPaid(ctx, tid, inv2.ID.Hex(), CancelPaidInput{Reason: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	later := dayStart(testNow).AddDate(0, 3, 0)
+	fx.feeByLabel("M").LastInvoicedThrough = &later
+	if _, err := fx.inv.CancelPaid(ctx, tid, inv2.ID.Hex(), CancelPaidInput{Reason: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fx.lit(t, "M"); got == nil || !got.Equal(later) {
+		t.Fatalf("a later advance was undone: %v", got)
+	}
+}
+
+func TestCancelPaidClearsDomainPaidThrough(t *testing.T) {
+	fx, _, inv := paidFixture(t)
+	var d *models.TenantDomain
+	for _, e := range fx.domains.docs {
+		if e.Name == "tower.example" {
+			d = e
+		}
+	}
+	cc := &d.Payment.ClientCharge
+	if cc.PaidThrough == nil || cc.PaidAt == nil {
+		t.Fatal("pay did not settle the domain")
+	}
+	if _, err := fx.inv.CancelPaid(context.Background(), fx.a.Hex(), inv.ID.Hex(), CancelPaidInput{Reason: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	if cc.PaidThrough != nil || cc.PaidAt != nil {
+		t.Fatal("paid_through and paid_at must be cleared")
+	}
+	if cc.Reference != "REF1" {
+		t.Fatal("method and reference are left")
+	}
+}
+
+func TestMarkPaidAdvancesSubscriptionOnce(t *testing.T) {
+	fx, subs, inv := paidFixture(t)
+	sub := fx.subs[fx.a]
+	if inv.SubAdvancedTo == nil || !sub.CurrentPeriodEnd.Equal(*inv.SubAdvancedTo) || subs.advances != 1 {
+		t.Fatalf("end = %v, stored = %v, advances = %d", sub.CurrentPeriodEnd, inv.SubAdvancedTo, subs.advances)
+	}
+	end := sub.CurrentPeriodEnd
+	// Replaying the pay (heal path) does not advance again.
+	_, _ = fx.inv.MarkPaid(context.Background(), fx.a.Hex(), inv.ID.Hex(), PaidInput{})
+	if !sub.CurrentPeriodEnd.Equal(end) || subs.advances != 1 {
+		t.Fatalf("replay moved the end to %v (%d advances)", sub.CurrentPeriodEnd, subs.advances)
+	}
+}
+
+func TestMarkPaidSkipsSubscriptionWhenCanceledOrRenewed(t *testing.T) {
+	for name, mutate := range map[string]func(*models.Subscription){
+		"canceled":        func(s *models.Subscription) { s.Status = models.SubscriptionCanceled },
+		"renewed by hand": func(s *models.Subscription) { s.CurrentPeriodEnd = *days(40) },
+	} {
+		fx := newInvFixture()
+		fx.seed(t)
+		subs := &invSubs{costSubs: fx.subs}
+		fx.inv.SetSubscriptions(subs)
+		inv := fx.createAllDue(t, nil)
+		if _, err := fx.inv.Send(context.Background(), fx.a.Hex(), inv.ID.Hex(), SendInput{}); err != nil {
+			t.Fatal(err)
+		}
+		sub := fx.subs[fx.a]
+		mutate(sub)
+		before := sub.CurrentPeriodEnd
+		out, err := fx.inv.MarkPaid(context.Background(), fx.a.Hex(), inv.ID.Hex(), PaidInput{})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if out.SubAdvancedTo != nil || !sub.CurrentPeriodEnd.Equal(before) || subs.advances != 0 {
+			t.Errorf("%s: subscription was touched (%v, %d)", name, out.SubAdvancedTo, subs.advances)
+		}
+	}
+}
+
+func TestCancelPaidRollsBackSubscriptionOnlyWhenUnchanged(t *testing.T) {
+	// Untouched since the pay: rolled back to the billed end.
+	fx, _, inv := paidFixture(t)
+	billed := dayStart(*days(5))
+	if _, err := fx.inv.CancelPaid(context.Background(), fx.a.Hex(), inv.ID.Hex(), CancelPaidInput{Reason: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fx.subs[fx.a].CurrentPeriodEnd; !got.Equal(billed) {
+		t.Fatalf("rolled back to %v, want %v", got, billed)
+	}
+	if fx.subs[fx.a].Status != models.SubscriptionActive {
+		t.Fatal("status must not change")
+	}
+
+	// Moved since (renewed again by hand): left alone.
+	fx2, _, inv2 := paidFixture(t)
+	moved := dayStart(*days(90))
+	fx2.subs[fx2.a].CurrentPeriodEnd = moved
+	if _, err := fx2.inv.CancelPaid(context.Background(), fx2.a.Hex(), inv2.ID.Hex(), CancelPaidInput{Reason: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fx2.subs[fx2.a].CurrentPeriodEnd; !got.Equal(moved) {
+		t.Fatalf("a later renewal was undone: %v", got)
+	}
+}
+
+func TestCancelPaidLegacyInvoiceLeavesSubscription(t *testing.T) {
+	fx, _, inv := paidFixture(t)
+	fx.st.docs[0].SubAdvancedTo = nil
+	end := fx.subs[fx.a].CurrentPeriodEnd
+	if _, err := fx.inv.CancelPaid(context.Background(), fx.a.Hex(), inv.ID.Hex(), CancelPaidInput{Reason: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	if !fx.subs[fx.a].CurrentPeriodEnd.Equal(end) {
+		t.Fatal("legacy invoice must not touch the subscription")
 	}
 }

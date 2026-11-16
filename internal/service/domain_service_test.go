@@ -60,6 +60,19 @@ func (f *fakeDomainStore) MarkClientPaid(_ context.Context, tid, id primitive.Ob
 	return nil
 }
 
+// ClearClientPaid mimics the repository: only while paid_through equals through.
+func (f *fakeDomainStore) ClearClientPaid(_ context.Context, tid, id primitive.ObjectID, through time.Time) error {
+	for _, e := range f.docs {
+		if e.ID == id && e.TenantID == tid {
+			cc := &e.Payment.ClientCharge
+			if cc.PaidThrough != nil && cc.PaidThrough.Equal(through) {
+				cc.PaidAt, cc.PaidThrough = nil, nil
+			}
+		}
+	}
+	return nil
+}
+
 // fakeDomainFees counts active fees per domain id.
 type fakeDomainFees map[primitive.ObjectID]int64
 

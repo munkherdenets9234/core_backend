@@ -269,6 +269,31 @@ func (r *SubscriptionRepo) ExtendPeriod(ctx context.Context, tenantID primitive.
 	return nil
 }
 
+// AdvancePeriod moves current_period_end to newEnd and marks the subscription
+// active, only while the current end is on or before the day of billedEnd, so
+// a replay or a manual renewal that already went further is left alone. No
+// match is not an error.
+func (r *SubscriptionRepo) AdvancePeriod(ctx context.Context, tenantID primitive.ObjectID, billedEnd, newEnd time.Time) error {
+	day := time.Date(billedEnd.Year(), billedEnd.Month(), billedEnd.Day(), 0, 0, 0, 0, time.UTC)
+	_, err := r.col.UpdateOne(ctx,
+		bson.M{"tenant_id": tenantID, "current_period_end": bson.M{"$lt": day.AddDate(0, 0, 1)}},
+		bson.M{"$set": bson.M{
+			"current_period_end": newEnd,
+			"status":             models.SubscriptionActive,
+			"updated_at":         time.Now(),
+		}})
+	return err
+}
+
+// RollbackPeriod sets current_period_end back to to, only while it still
+// equals from exactly. The status is not touched. No match is not an error.
+func (r *SubscriptionRepo) RollbackPeriod(ctx context.Context, tenantID primitive.ObjectID, from, to time.Time) error {
+	_, err := r.col.UpdateOne(ctx,
+		bson.M{"tenant_id": tenantID, "current_period_end": from},
+		bson.M{"$set": bson.M{"current_period_end": to, "updated_at": time.Now()}})
+	return err
+}
+
 // SetBillingDay records the day a subscription renews on. It does not move the
 // current period: see SubscriptionService.SetBillingDay.
 func (r *SubscriptionRepo) SetBillingDay(ctx context.Context, tenantID primitive.ObjectID, day int, userID *primitive.ObjectID) error {

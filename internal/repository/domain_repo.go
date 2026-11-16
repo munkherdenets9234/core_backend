@@ -123,6 +123,20 @@ func (r *TenantDomainRepo) MarkClientPaid(ctx context.Context, tenantID, id prim
 	return err
 }
 
+// ClearClientPaid undoes MarkClientPaid for a cancelled invoice: paid_at and
+// paid_through are unset only while paid_through still equals through (a later
+// payment or renewal is left alone). Method and reference stay. A missing
+// domain or one that moved on is not an error.
+func (r *TenantDomainRepo) ClearClientPaid(ctx context.Context, tenantID, id primitive.ObjectID, through time.Time) error {
+	_, err := r.col.UpdateOne(ctx, bson.M{
+		"_id": id, "tenant_id": tenantID, "payment.client_charge.paid_through": through,
+	}, bson.M{
+		"$unset": bson.M{"payment.client_charge.paid_at": "", "payment.client_charge.paid_through": ""},
+		"$set":   bson.M{"updated_at": time.Now().UTC()},
+	})
+	return err
+}
+
 // Delete returns mongo.ErrNoDocuments unless the domain belongs to tenantID.
 func (r *TenantDomainRepo) Delete(ctx context.Context, tenantID, id primitive.ObjectID) error {
 	res, err := r.col.DeleteOne(ctx, bson.M{"_id": id, "tenant_id": tenantID})

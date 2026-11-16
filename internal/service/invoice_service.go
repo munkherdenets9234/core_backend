@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -57,9 +58,25 @@ type billSource interface {
 	Billables(ctx context.Context, tid primitive.ObjectID) ([]Billable, *Billable, error)
 }
 
-// feeAdvancer moves a fee's last_invoiced_through forward.
+// feeAdvancer moves a fee's last_invoiced_through forward, and back again when
+// a paid invoice is cancelled.
 type feeAdvancer interface {
 	AdvanceInvoicedThrough(ctx context.Context, tenantID, id primitive.ObjectID, through time.Time) error
+	// Find returns mongo.ErrNoDocuments unless the fee belongs to the tenant.
+	Find(ctx context.Context, tenantID, id primitive.ObjectID) (*models.TenantFee, error)
+	// RevertInvoicedThrough sets last_invoiced_through to prev (unset when nil)
+	// only while it still equals through.
+	RevertInvoicedThrough(ctx context.Context, tenantID, id primitive.ObjectID, through time.Time, prev *time.Time) error
+}
+
+// subPeriods is the subscription side of paying and cancelling an invoice.
+type subPeriods interface {
+	Get(ctx context.Context, tenantID primitive.ObjectID) (*models.Subscription, error)
+	// AdvancePeriod sets current_period_end to newEnd (status active) only while
+	// the current end is on or before the day of billedEnd.
+	AdvancePeriod(ctx context.Context, tenantID primitive.ObjectID, billedEnd, newEnd time.Time) error
+	// RollbackPeriod sets current_period_end to to only while it equals from.
+	RollbackPeriod(ctx context.Context, tenantID primitive.ObjectID, from, to time.Time) error
 }
 
 // domainSettler records a client payment on a domain of the tenant. It is
@@ -68,6 +85,9 @@ type domainSettler interface {
 	// method and reference (domain vocabulary: cash|bank|card|other) are
 	// recorded with the payment when non-empty.
 	MarkClientPaid(ctx context.Context, tenantID, id primitive.ObjectID, paidAt, through time.Time, method, reference string) error
+	// ClearClientPaid undoes MarkClientPaid for through, only while paid_through
+	// still equals it.
+	ClearClientPaid(ctx context.Context, tenantID, id primitive.ObjectID, through time.Time) error
 }
 
 // paymentSettingsReader returns the platform's bank details; an empty,
@@ -126,9 +146,14 @@ type InvoiceService struct {
 	tenants  tenantFinder
 	mail     sender
 	settings paymentSettingsReader
+	subs     subPeriods // optional; nil skips subscription advance and rollback
 	appName  string
 	now      func() time.Time
 }
+
+// SetSubscriptions wires the subscription period source. Without it paying an
+// invoice leaves the subscription alone.
+func (s *InvoiceService) SetSubscriptions(src subPeriods) { s.subs = src }
 
 // NewInvoiceService wires the service. A nil mail (or one that is not
 // configured) makes Send answer 503; nil settings (or ones that are not
@@ -780,8 +805,9 @@ func FormatBP(bp int) string {
 
 // MarkPaid records the payment of a sent invoice. For deployment and other
 // fee lines it also advances last_invoiced_through to the period billed;
-// domain lines settle the domain's client charge (see advanceFees); the
-// subscription line advances nothing (the operator renews the subscription).
+// domain lines settle the domain's client charge and a subscription line moves
+// current_period_end to the next period (see advanceFees). CancelPaid reverses
+// all of it.
 func (s *InvoiceService) MarkPaid(ctx context.Context, tenantIDStr, invIDStr string, in PaidInput) (*models.Invoice, error) {
 	tid, iid, err := parseInvoiceKey(tenantIDStr, invIDStr)
 	if err != nil {
@@ -814,8 +840,15 @@ func (s *InvoiceService) MarkPaid(ctx context.Context, tenantIDStr, invIDStr str
 	// The status change goes first and is the conditional step that only one
 	// caller wins (a concurrent Void loses). The fee advance after it is
 	// idempotent and monotone, so it can safely be replayed.
-	out, err := s.repo.Transition(ctx, tid, iid, []string{models.InvoiceSent},
-		bson.M{"status": models.InvoicePaid, "paid_at": paidAt, "payment": pay})
+	set := bson.M{"status": models.InvoicePaid, "paid_at": paidAt, "payment": pay}
+	subEnd, err := s.subscriptionAdvance(ctx, tid, inv)
+	if err != nil {
+		return nil, err
+	}
+	if subEnd != nil {
+		set["sub_advanced_to"] = *subEnd
+	}
+	out, err := s.repo.Transition(ctx, tid, iid, []string{models.InvoiceSent}, set)
 	if err != nil {
 		return nil, s.transitionErr(err, "invoice changed while it was being marked paid")
 	}
@@ -823,6 +856,39 @@ func (s *InvoiceService) MarkPaid(ctx context.Context, tenantIDStr, invIDStr str
 		return nil, apierr.Internal(err)
 	}
 	return out, nil
+}
+
+// subscriptionAdvance computes, without changing anything, the period end a
+// paid subscription line moves the subscription to. nil when the invoice has
+// no such line, there is no subscription, it is canceled, or its period
+// already runs past the billed one (renewed by hand first).
+func (s *InvoiceService) subscriptionAdvance(ctx context.Context, tid primitive.ObjectID, inv *models.Invoice) (*time.Time, error) {
+	if s.subs == nil {
+		return nil, nil
+	}
+	for _, l := range inv.Lines {
+		if l.Kind != models.FeeKindSubscription {
+			continue
+		}
+		billedEnd, err := time.Parse(dateLayout, l.Period)
+		if err != nil {
+			return nil, nil
+		}
+		sub, err := s.subs.Get(ctx, tid)
+		if err != nil {
+			var ae *apierr.APIError
+			if errors.As(err, &ae) && ae.HTTPStatus == http.StatusNotFound {
+				return nil, nil
+			}
+			return nil, apierr.Internal(err)
+		}
+		if !renewable(sub.Status) || dayStart(sub.CurrentPeriodEnd).After(billedEnd) {
+			return nil, nil
+		}
+		end := renewedEnd(s.now(), sub.CurrentPeriodEnd, periodFor(sub.Plan), sub.EffectiveBillingDay())
+		return &end, nil
+	}
+	return nil, nil
 }
 
 // buildPayment validates the optional transaction record and returns the
@@ -897,7 +963,10 @@ func clientPayMethod(m string) string {
 }
 
 // advanceFees moves last_invoiced_through of the recurring fee lines of a
-// paid invoice up to the period billed.
+// paid invoice up to the period billed, and the subscription line (when
+// MarkPaid stored SubAdvancedTo) to its next period end. The subscription step
+// applies only while the current end is not past the billed period, so a
+// replay never advances twice.
 //
 // Each domain line also settles its domain's client charge: paid_at is now and
 // paid_through is the expires_at date the line billed (the line's period; today
@@ -906,6 +975,19 @@ func clientPayMethod(m string) string {
 // and an expiry renewed since the invoice is not marked paid.
 func (s *InvoiceService) advanceFees(ctx context.Context, tid primitive.ObjectID, inv *models.Invoice) error {
 	for _, l := range inv.Lines {
+		if l.Kind == models.FeeKindSubscription {
+			if s.subs == nil || inv.SubAdvancedTo == nil {
+				continue
+			}
+			billedEnd, err := time.Parse(dateLayout, l.Period)
+			if err != nil {
+				continue
+			}
+			if err := s.subs.AdvancePeriod(ctx, tid, billedEnd, *inv.SubAdvancedTo); err != nil {
+				return err
+			}
+			continue
+		}
 		if l.Kind == models.FeeKindDomain && l.DomainID != nil && s.domains != nil {
 			now := s.now().UTC()
 			through, err := time.Parse(dateLayout, l.Period)
@@ -935,8 +1017,106 @@ func (s *InvoiceService) advanceFees(ctx context.Context, tid primitive.ObjectID
 	return nil
 }
 
+// CancelPaidInput is the body of the cancel call.
+type CancelPaidInput struct {
+	Reason string `json:"reason"`
+}
+
+// CancelPaid cancels a paid invoice: it becomes void, its lines can be
+// invoiced again and what MarkPaid advanced is reversed. The reason is
+// required. The status change goes first (one conditional update); the
+// reversal after it is conditional step by step and replayable, so calling it
+// again on a cancelled invoice re-runs the reversal and heals a failed one.
+func (s *InvoiceService) CancelPaid(ctx context.Context, tenantIDStr, invIDStr string, in CancelPaidInput) (*models.Invoice, error) {
+	tid, iid, err := parseInvoiceKey(tenantIDStr, invIDStr)
+	if err != nil {
+		return nil, err
+	}
+	reason, ok := cleanText(in.Reason, 500, true)
+	if !ok || reason == "" {
+		return nil, apierr.BadRequest("invalid reason").In(apierr.DomainTenant)
+	}
+	inv, err := s.repo.Find(ctx, tid, iid)
+	if err != nil {
+		return nil, invoiceNotFoundOr(err)
+	}
+	switch {
+	case inv.Status == models.InvoicePaid:
+		out, err := s.repo.Transition(ctx, tid, iid, []string{models.InvoicePaid},
+			bson.M{"status": models.InvoiceVoid, "period_keys": nil, "cancel_reason": reason, "cancelled_at": s.now().UTC()})
+		if err != nil {
+			return nil, s.transitionErr(err, "invoice changed while it was being cancelled")
+		}
+		inv = out
+	case inv.Status == models.InvoiceVoid && inv.CancelledAt != nil:
+		// Already cancelled: re-run the reversal below (heals a failed one).
+	default:
+		return nil, apierr.Conflict("only a paid invoice can be cancelled").In(apierr.DomainTenant)
+	}
+	if err := s.reverseAdvance(ctx, tid, inv); err != nil {
+		return nil, apierr.Internal(err)
+	}
+	return inv, nil
+}
+
+// reverseAdvance undoes advanceFees. Every step is conditional on the value
+// MarkPaid wrote still being there, so a later change is never undone.
+func (s *InvoiceService) reverseAdvance(ctx context.Context, tid primitive.ObjectID, inv *models.Invoice) error {
+	for _, l := range inv.Lines {
+		switch {
+		case l.Kind == models.FeeKindSubscription:
+			if s.subs == nil || inv.SubAdvancedTo == nil {
+				continue
+			}
+			billedEnd, err := time.Parse(dateLayout, l.Period)
+			if err != nil {
+				continue
+			}
+			if err := s.subs.RollbackPeriod(ctx, tid, *inv.SubAdvancedTo, billedEnd); err != nil {
+				return err
+			}
+		case l.Kind == models.FeeKindDomain && l.DomainID != nil:
+			if s.domains == nil {
+				continue
+			}
+			through, err := time.Parse(dateLayout, l.Period)
+			if err != nil {
+				continue
+			}
+			if err := s.domains.ClearClientPaid(ctx, tid, *l.DomainID, through); err != nil {
+				return err
+			}
+		case l.FeeID != nil && (l.Kind == models.FeeKindDeployment || l.Kind == models.FeeKindOther):
+			period, err := time.Parse(dateLayout, l.Period)
+			if err != nil {
+				continue
+			}
+			fee, err := s.fees.Find(ctx, tid, *l.FeeID)
+			if err != nil {
+				if errors.Is(err, mongo.ErrNoDocuments) {
+					continue
+				}
+				return err
+			}
+			var prev *time.Time
+			switch fee.Interval {
+			case models.FeeIntervalMonthly:
+				p := addMonths(period, -1, billingAnchorDay(fee))
+				prev = &p
+			case models.FeeIntervalYearly:
+				p := addMonths(period, -12, billingAnchorDay(fee))
+				prev = &p
+			}
+			if err := s.fees.RevertInvoicedThrough(ctx, tid, *l.FeeID, period, prev); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // Void cancels a draft or sent invoice, freeing its fee periods to be
-// invoiced again. Paid and void invoices are terminal.
+// invoiced again. Paid invoices are refused (see CancelPaid); void is terminal.
 func (s *InvoiceService) Void(ctx context.Context, tenantIDStr, invIDStr string) (*models.Invoice, error) {
 	tid, iid, err := parseInvoiceKey(tenantIDStr, invIDStr)
 	if err != nil {

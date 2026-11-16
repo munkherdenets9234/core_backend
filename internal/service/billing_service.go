@@ -400,6 +400,18 @@ func (s *SubscriptionService) Renew(ctx context.Context, tenantID primitive.Obje
 	return s.Get(ctx, tenantID)
 }
 
+// AdvancePeriod applies the period end MarkPaid computed for a paid
+// subscription line. See SubscriptionRepo.AdvancePeriod.
+func (s *SubscriptionService) AdvancePeriod(ctx context.Context, tenantID primitive.ObjectID, billedEnd, newEnd time.Time) error {
+	return s.repo.AdvancePeriod(ctx, tenantID, billedEnd, newEnd)
+}
+
+// RollbackPeriod undoes AdvancePeriod for a cancelled invoice, only while the
+// period end is still from.
+func (s *SubscriptionService) RollbackPeriod(ctx context.Context, tenantID primitive.ObjectID, from, to time.Time) error {
+	return s.repo.RollbackPeriod(ctx, tenantID, from, to)
+}
+
 // SetBillingDay changes the day a subscription renews on.
 //
 // It deliberately does not touch current_period_end. Moving the current end

@@ -115,6 +115,24 @@ func (r *TenantFeeRepo) Delete(ctx context.Context, tenantID, id primitive.Objec
 	return nil
 }
 
+// RevertInvoicedThrough sets last_invoiced_through back to prev (unset when
+// prev is nil) only while it still equals through, so it never undoes a later
+// change. A missing fee or a value that moved on is not an error.
+func (r *TenantFeeRepo) RevertInvoicedThrough(ctx context.Context, tenantID, id primitive.ObjectID, through time.Time, prev *time.Time) error {
+	var update bson.M
+	if prev != nil {
+		update = bson.M{"$set": bson.M{"last_invoiced_through": *prev, "updated_at": time.Now().UTC()}}
+	} else {
+		update = bson.M{
+			"$unset": bson.M{"last_invoiced_through": ""},
+			"$set":   bson.M{"updated_at": time.Now().UTC()},
+		}
+	}
+	_, err := r.col.UpdateOne(ctx,
+		bson.M{"_id": id, "tenant_id": tenantID, "last_invoiced_through": through}, update)
+	return err
+}
+
 // AdvanceInvoicedThrough moves last_invoiced_through forward to through. It
 // never moves it back, so replaying it is harmless, and a fee that no longer
 // exists is not an error.

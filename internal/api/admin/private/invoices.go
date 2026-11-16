@@ -97,6 +97,20 @@ func (h *invoicesController) Void(c *gin.Context) error {
 	return nil
 }
 
+// Cancel cancels a paid invoice. Body: {"reason": "..."} (required).
+func (h *invoicesController) Cancel(c *gin.Context) error {
+	var in service.CancelPaidInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		return apierr.BadRequest("invalid request body").In(apierr.DomainTenant)
+	}
+	inv, err := h.svc.CancelPaid(c.Request.Context(), c.Param("id"), c.Param("invId"), in)
+	if err != nil {
+		return err
+	}
+	response.OK(c, inv)
+	return nil
+}
+
 // Delete removes a draft invoice (409 for any other status).
 func (h *invoicesController) Delete(c *gin.Context) error {
 	if err := h.svc.Delete(c.Request.Context(), c.Param("id"), c.Param("invId")); err != nil {
